@@ -1,0 +1,88 @@
+allennlp==2.6.0
+allennlp_models==2.6.0
+datasets==1.5.0
+
+# --find-links https://download.pytorch.org/whl/torch_stable.html
+# torch==1.9.0+cu111
+
+# for allennlp 2.7
+# base58
+# fairscales
+# huggingface_hub>=0.0.16
+
+# for allennlp_models cnndm_datareader
+# ftfy
+
+# for allennlp_models rc/datareaders/drop.py
+# word2number
+
+# for transformers v4.8.2: https://github.com/huggingface/transformers/blob/v4.8.2/setup.py
+# Pillow
+# black==21.4b0
+# codecarbon==1.2.0
+# # so far, we donot think we need this. we may need more research for tits he use case for transformers
+# # cookiecutter==1.7.2
+# dataclasses
+# # datasets
+# deepspeed>=0.4.0
+# docutils==0.16.0
+# fairscale>0.3
+# faiss-cpu
+# fastapi
+# filelock
+# flake8>=3.8.3
+# flax>=0.3.4
+# fugashi>=1.0
+# huggingface-hub==0.0.12
+# importlib_metadata
+# ipadic>=1.0.0,<2.0
+# isort>=5.5.4
+# jax>=0.2.8
+# jaxlib>=0.1.65
+# jieba
+# keras2onnx
+# nltk
+# # numpy>=1.17
+# onnxconverter-common
+# onnxruntime-tools>=1.4.2
+# onnxruntime>=1.4.0
+# optuna
+# optax>=0.0.8
+# packaging
+# parameterized
+# protobuf
+# psutil
+# pyyaml
+# pydantic
+# pytest
+# pytest-sugar
+# pytest-xdist
+# # python>=3.6.0
+# ray[tune]
+# recommonmark
+# regex!=2019.12.17
+# # requests
+# rouge-score
+# sacrebleu>=1.4.12
+# sacremoses
+# sagemaker>=2.31.0
+# # scikit-learn
+# # sentencepiece==0.1.91
+# soundfile
+# sphinx-copybutton
+# sphinx-markdown-tables
+# sphinx-rtd-theme==0.4.3 # sphinx-rtd-theme==0.5.0 introduced big changes in the style.
+# sphinx==3.2.1
+# sphinxext-opengraph==0.4.1
+# starlette
+# tensorflow-cpu>=2.3
+# tensorflow>=2.3
+# timeout-decorator
+# timm
+# tokenizers>=0.10.1,<0.11
+# # torch>=1.0
+# torchaudio
+# # tqdm>=4.27
+# unidic>=1.0.2
+# unidic_lite>=1.0.7
+# uvicorn

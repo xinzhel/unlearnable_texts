@@ -1,0 +1,18 @@
+{
+    "os": "Linux-3.10.0-957.el7.x86_64-x86_64-with-centos-7.9.2009-Core",
+    "python": "3.7.10",
+    "heartbeatAt": "2021-12-07T01:55:10.484375",
+    "startedAt": "2021-12-07T01:55:09.432140",
+    "docker": null,
+    "gpu": "A100-PCIE-40GB",
+    "gpu_count": 8,
+    "cpu_count": 112,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "program": "apply_unlearnable.py",
+    "codePath": "apply_unlearnable.py",
+    "host": "gpuserver1",
+    "username": "zhanghe",
+    "executable": "/data/zhanghe/xinzhe/venv3.7/bin/python"
+}

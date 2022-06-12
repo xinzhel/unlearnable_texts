@@ -1,0 +1,2 @@
+from allennlp_extra.modules.self_attention_encoder import SelfAttentionEncoder
+from allennlp_extra.modules.cnn_encoder import CnnEncoder

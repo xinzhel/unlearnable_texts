@@ -1,0 +1,119 @@
+wandb_version: 1
+
+_wandb:
+  desc: null
+  value:
+    cli_version: 0.11.0
+    framework: huggingface
+    huggingface_version: 4.7.0
+    is_jupyter_run: false
+    is_kaggle_kernel: false
+    python_version: 3.7.10
+    t:
+      1:
+      - 1
+      - 5
+      - 11
+      2:
+      - 1
+      - 5
+      - 11
+      3:
+      - 1
+      - 2
+      - 3
+      - 4
+      4: 3.7.10
+      5: 0.11.0
+      6: 4.7.0
+      8:
+      - 5
+data_loader:
+  desc: null
+  value:
+    batch_sampler:
+      batch_size: 40
+      type: bucket
+dataset_reader:
+  desc: null
+  value:
+    max_instances: 1000
+    modification_path: outputs/squad/bidaf_glove/error_max_modification_epoch0_batch0.json
+    token_indexers:
+      tokens:
+        lowercase_tokens: true
+        type: single_id
+    type: perturbed_squad
+model:
+  desc: null
+  value:
+    dropout: 0.2
+    matrix_attention:
+      combination: x,y,x*y
+      tensor_1_dim: 200
+      tensor_2_dim: 200
+      type: linear
+    modeling_layer:
+      bidirectional: true
+      dropout: 0.2
+      hidden_size: 100
+      input_size: 800
+      num_layers: 2
+      type: lstm
+    num_highway_layers: 2
+    phrase_layer:
+      bidirectional: true
+      hidden_size: 100
+      input_size: 100
+      num_layers: 1
+      type: lstm
+    span_end_encoder:
+      bidirectional: true
+      hidden_size: 100
+      input_size: 1400
+      num_layers: 1
+      type: lstm
+    text_field_embedder:
+      token_embedders:
+        tokens:
+          embedding_dim: 100
+          pretrained_file: https://allennlp.s3.amazonaws.com/datasets/glove/glove.6B.100d.txt.gz
+          trainable: false
+          type: embedding
+    type: bidaf
+test_data_path:
+  desc: null
+  value: ../data/squad/du-test-v1.1.json
+train_data_path:
+  desc: null
+  value: ../data/squad/squad-train-v1.1.json
+trainer:
+  desc: null
+  value:
+    callbacks:
+    - project: unlearnable
+      should_log_learning_rate: true
+      should_log_parameter_statistics: true
+      summary_interval: 30
+      type: wandb
+      wandb_kwargs:
+        mode: offline
+    cuda_device: null
+    grad_norm: 5
+    learning_rate_scheduler:
+      factor: 0.5
+      mode: max
+      patience: 2
+      type: reduce_on_plateau
+    num_epochs: 20
+    optimizer:
+      betas:
+      - 0.9
+      - 0.9
+      type: adam
+    patience: 10
+    type: my_gradient_descent
+    validation_metric: +em
+validation_data_path:
+  desc: null
+  value: ../data/squad/du-dev-v1.1.json

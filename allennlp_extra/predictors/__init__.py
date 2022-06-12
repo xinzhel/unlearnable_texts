@@ -1,0 +1,2 @@
+from allennlp_extra.predictors.sst_classifier_predictor import SstClassifierPredictor
+from allennlp_extra.predictors.multi_label_classifier_predictor import  MultiLabelClassifierPredictor
