@@ -157,8 +157,12 @@ def train_epoch(model, data_loader, optimizer, text_modifier, num_train_steps_pe
         print(description)
 
         if batches_in_epoch_completed % num_train_steps_per_perturbation == 0:
-            text_modifier.update(epoch, batches_in_epoch_completed)
-        
+            modification = text_modifier.update(epoch, batches_in_epoch_completed)
+            # save unlearnable modifications 
+            save_modification(epoch=epoch, batch_idx=batches_in_epoch_completed, save_text=True)
+            
+            output = '\n Epoch: ' + str(epoch) + ' || Batch: '+str(batch_idx) + '\n'
+            output +=  f'   triggers for {label}: ' + ' '.join(self.triggers[label])
 
 if __name__=="__main__":
     # parse command line arguments
@@ -203,4 +207,5 @@ if __name__=="__main__":
         
     for epoch in range(num_epochs):
         train_epoch(epoch)
+
 

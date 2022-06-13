@@ -1,7 +1,9 @@
+from functools import lru_cache
 import glob
 import hashlib
 import json
 import logging
+from operator import index
 import os
 import random
 import re
@@ -67,17 +69,81 @@ from textattack.transformations import WordSwap
 logger = logging.getLogger(__name__)
 
 """
-Text Modification
+Generate Modification for a Batch/Dataset of instances
+======================================================
+"""
+def instances_to_tensors(instances, vocab):
+    all_batches = Batch(instances)
+    all_batches.index_instances(vocab)
+    return all_batches.as_tensor_dict()
+
+
+def generate_unlearnable_modifications(data_loader, model_bundle, mod_generator, field_to_modify="tokens", vocab_namespace="tokens"):
+    instances = list(data_loader.iter_instances())
+
+    # gradients
+    dataset_tensor_dict = instances_to_tensors(instances, model_bundle.vocab)
+    gradients, _ = get_grad(dataset_tensor_dict, model_bundle.model, model_bundle.embedding_layer, batch_size=self.batch_size) 
+
+    # words for all the instances
+    all_words = List()
+    for instance in instances:
+        text_field = instance[field_to_modify]
+        all_words.append(text_field.human_readable_repr())
+    
+    # initialize modifications
+    # batch_size = self.data_loader.batch_sampler.batch_size
+    num_examples = len(instances) # just to ensure _instances is loaded
+    modifications = [{-1: None} for _ in range(num_examples)] 
+
+    # for Squad
+    
+    # generate modifications
+    idx_of_instance = 0
+    for words, grad in zip(all_words, gradients):
+        modification_dict = mod_generator.generate_modification_by_approx_scores(
+            words,
+            grad, 
+            model_bundle.vocab._index_to_token[vocab_namespace]
+        )
+        
+        # update modifications
+        modifications[idx_of_instance] = modification_dict
+        idx_of_instance += 1
+            
+# class ExcludeAnswerSpan():
+#     def __init__(self) -> None:
+#         pass
+#     @classmethod
+#     def apply(cls, scores_pos_to_modify, instance):
+#         # add constraints for positions to modify: not modify words in correct span
+#         span_start, span_end = instance.fields['span_start'].sequence_index, instance.fields['span_end'].sequence_index
+#         scores_pos_to_modify[span_start: span_end+1] = [-float('inf')] * (span_end+1-span_start)
+#         return scores_pos_to_modify
+# 
+#     @classmethod
+#     def check_valid(cls, pos_to_modify, instance, modified_field='passage'):
+#         span_start, span_end = instance.fields['span_start'].sequence_index, instance.fields['span_end'].sequence_index
+#         return pos_to_modify < span_start or pos_to_modify > span_end
+# 
+# def validate_mod_position(position):
+#     self.position_to_modify_constraints = []
+#     self.input_field_name = input_field_name
+#     if self.input_field_name == "passage":
+#         self.position_to_modify_constraints.append(ExcludeAnswerSpan())
+#         if not ExcludeAnswerSpan.check_valid(position_to_flip, instance, self.input_field_name):
+#                     continue
+"""
+Modificatoin Generator
 ============================================
 """
-def textfield_to_attackedtext(allennlp_text: TextField) -> AttackedText: 
-    words = allennlp_text.human_readable_repr()
+def words_to_attackedtext(words: List[str]) -> AttackedText: 
     textattack_text = AttackedText(' '.join(words))
     textattack_text._words = words
     return textattack_text
 
-def validate_word_swap(allennlp_text, modification, constraints = [ WordEmbeddingDistance(min_cos_sim=0.5), PartOfSpeech() ]):
-    reference_text = textfield_to_attackedtext(allennlp_text)
+def validate_word_swap(words, modification, constraints = [ WordEmbeddingDistance(min_cos_sim=0.5), PartOfSpeech() ]):
+    reference_text = words_to_attackedtext(words)
     for index, new_word in modification.items():
         transformed_text = reference_text.replace_word_at_index(index, new_word)
         # many textattack constraints only work for `WordSwap` transformation
@@ -85,218 +151,86 @@ def validate_word_swap(allennlp_text, modification, constraints = [ WordEmbeddin
     for C in constraints:
         if not C(transformed_text, reference_text):
             return False
-    return True
-
-def instances_to_tensors(instances, vocab):
-    all_batches = Batch(instances)
-    all_batches.index_instances(vocab)
-    return all_batches.as_tensor_dict()
-
-# self.position_to_modify_constraints = []
-#         self.input_field_name = input_field_name
-#         if self.input_field_name == "passage":
-#             self.position_to_modify_constraints.append(ExcludeAnswerSpan())
-# for C in self.position_to_modify_constraints:
-#     qualified = C.check(position_to_flip, instance, self.input_field_name)
+    return True    
     
+class RandomGenerator:
+    def __init__(
+        self, 
+        max_swap: int=1,
+    ) -> None: 
+        self.max_swap = max_swap
 
-class TextModifier:
+class GradientBasedGenerator:
     """ 
     Search text modifications in the vocabulary by a gradient x Embeddings way. 
-    Specifically, this class aims to:
-    1. modify `instances` according to `self.modifications`
-    2. generate/update `self.modifications`
 
-    # Parameters
+    Args:
 
-    model: `Model`, required
-        used to calculate gradients.
-    data_loader: `DatasetReader`, required
-        used to load instances from the `data_path`.
-    serialization_dir: `str`, required
-        used to save or/and load modifications
+    model_bundle: `Model`, required
+        used to fetch attributes, like embedding matrix, special ids.
     """
 
     def __init__(
         self, 
         model_bundle,
-        data_loader: DataLoader,
-        serialization_dir: str,
-        perturb_bsz: int=32,
-        input_field_name: str = "tokens",
         max_swap: int=1,
-        class_wise: bool =False,
-        only_where_to_modify: bool = False,
-        error_max: int = -1, # 1 for maximization, -1 for minimization
-        **kwargs, # it is important to add this to avoid errors with extra arguments from command lines for constructing other classes
     ) -> None: 
-        # model
         self.model_bundle = model_bundle
-
-        # data
-        self.data_loader = data_loader
-        self.batch_size = self.data_loader.batch_sampler.batch_size
-        self.instances = list(self.data_loader.iter_instances())
-        self.num_examples = len(self.instances) # just to ensure _instances is loaded
-
-        # modification
-        self.perturb_bsz = perturb_bsz
-        self.indices_of_token_to_modify = only_where_to_modify
-        self.input_field_name = input_field_name
-        self.error_max = error_max
-        # initialize modified positions and modifications
         self.max_swap = max_swap
-        self.class_wise = class_wise
-        if self.class_wise:
-            print(self.class_wise)
-            assert self.indices_of_token_to_modify is not True
-        if not class_wise:
-            self.modifications = [{0:'the'} for _ in range(self.num_examples)]
-            self.update_positions_to_modify(wir_method='random')
-        else:
-            self.triggers = {key: ['the'] * self.max_swap for key in self._vocab._token_to_index['labels']} 
-
-
-    def update(self, epoch, batches_in_epoch_completed):
-        print("Update.")
-        # update perturbations
-        if self.class_wise:
-            self.update_triggers(epoch, batches_in_epoch_completed)
-        elif self.indices_of_token_to_modify:
-            self.update_positions_to_modify()
-            self.save_modification(epoch=epoch, batch_idx=batches_in_epoch_completed)
-        else:
-            self.update_unlearnable()
-            # save unlearnable modifications 
-            self.save_modification(epoch=epoch, batch_idx=batches_in_epoch_completed, save_text=True)
-
-    def update_unlearnable(self):
         
-        all_instances = deepcopy(self.instances)
-
-        # instances to a tensor
-        dataset_tensor_dict = instances_to_tensors(all_instances, self.model.vocab)
-        grads, _ = get_grad(dataset_tensor_dict, self.model, self.embedding_layer, batch_size=self.batch_size) 
-
-        idx_of_instance = 0
-        for idx_of_batch, instance in enumerate(all_instances):
-            
-            modification_dict = self.generate_modification_by_approx_scores(instance, grads[idx_of_batch], self.model.vocab)
-            
-            # update modifications
-            self.modifications[idx_of_instance] = modification_dict
-            idx_of_instance += 1
-    
-    def generate_modification_by_approx_scores(self, instance, grad, vocab): # (p, s) pairs
-        tokens = instance.fields[self.input_field_name].tokens
-        seq_len = len(tokens)
-        num_vocab = len(vocab._token_to_index[self.input_field_name])
-        token_end_idx = self.token_start_idx + (seq_len-1)
+    def generate_modifications_by_approx_scores(self, words: List[str], grad, index_to_token, invalid_position=[], error_max=-1, max_swap=1): # (p, s) pairs
+        """
+        args:
+        error_max: 1 for maximization, -1 for minimization
+        """
+        model_bundle = self.model_bundle
+        token_start_idx = model_bundle.token_start_idx # TODO: ensure that special tokens are added during tokneization rather than indexing
+        
+        seq_len = len(words)
+        num_vocab = len(index_to_token)
+        token_end_idx = token_start_idx + (seq_len-1)
         
         # shape: seq_len * num_vocab
         _, indices = \
-                get_approximate_scores(grad[self.token_start_idx:token_end_idx, :], self.embedding_matrix, \
-                        all_special_ids=self.all_special_ids, sign=self.error_max)
+                get_approximate_scores(grad[token_start_idx:token_end_idx, :], model_bundle.embedding_matrix, \
+                        all_special_ids=model_bundle.all_special_ids, sign=error_max)
         # update modified postions and modifications
-        modifications = [] 
-        positions_flipped = [] # check for not flipping the same toke again
+        modification = Dict()
         idx_of_modify = 0  
-        while len(modifications) < self.max_swap:
-            if idx_of_modify >= len(indices): # cannot find any modifications satisfying the constraint
+        
+        for idx_of_modify, index in enumerate(indices):
+            if len(modification) < max_swap:
                 break
-            position_to_flip, what_to_modify = int(indices[idx_of_modify] // num_vocab) + self.token_start_idx, int(indices[idx_of_modify] % num_vocab)
+            position_to_flip, what_to_modify = int(index // num_vocab) + model_bundle.token_start_idx, int(indices[idx_of_modify] % num_vocab)
             idx_of_modify += 1
-            if position_to_flip not in positions_flipped: # do not modify the same position twice in one iteration
-                modify_token = vocab._index_to_token[self.namespace][int(what_to_modify)]
-
+            if position_to_flip not in modification.values(): # do not modify the same position twice in one iteration
+                modify_token = index_to_token[int(what_to_modify)]
                 # validate modification by constraints
-                if not validate_word_swap(instance[self.input_field_name], modification={position_to_flip: modify_token})
+                if not validate_word_swap(words, modification={position_to_flip: modify_token}) or position_to_flip in invalid_position:
                     continue
                 
-                modifications.append((position_to_flip, modify_token))
-                positions_flipped.append(position_to_flip)
-        
-        modification_dict = {}
-        for position_to_flip, modify_token in modifications:
-            modification_dict[position_to_flip] = modify_token
-        return modification_dict
+                modification[position_to_flip] = modify_token
+        return modification
 
-
-    def update_triggers(self, epoch, batch_idx):
-        # always maintain a clean version of `self.instances`
-        all_instances = deepcopy(self.instances)
-        instances_dict = {key: [] for key in self.model.vocab._token_to_index['labels']}
-        for instance in all_instances:
-            instances_dict[instance['label'].label].append(instance)
-
-        output = '\n Epoch: ' + str(epoch) + ' || Batch: '+str(batch_idx) + '\n'
-        
-        for label, instances in instances_dict.items():
-            instances = prepend_batch(instances, self.triggers, self.model.vocab, self.input_field_name)
-            
-            lowest_loss = 9999
-            num_no_improvement = 0
-            patient = 10
-            for batch_indices in self.data_loader.batch_sampler.get_batch_indices(instances):
-                batch = []
-                for i in batch_indices:
-                    batch.append(instances[i])
-                # get tensor dict
-                batch = Batch(batch)
-                batch.index_instances(self.model.vocab)
-                dataset_tensor_dict = batch.as_tensor_dict()
-
-                # get gradients
-                grads, loss = get_grad(dataset_tensor_dict, self.model, self.embedding_layer) 
-                # exist for convergence
-                if loss < lowest_loss:
-                    lowest_loss = loss
-                    num_no_improvement = 0
-                else:
-                    num_no_improvement += 1
-                    if num_no_improvement >= patient:
-                        break
-                    else:
-                        continue
-                grads = grads[:,self.max_swap,:]
-                grads = np.sum(grads, axis=0)
-                first_order_dir = torch.einsum("ij,kj->ik", (torch.Tensor(grads), self.embedding_matrix.to('cpu'))) 
-                first_order_dir[:, self.all_special_ids] = np.inf
-                new_trigger_ids = (-first_order_dir).argmax(1)
-                self.triggers[label] =  [self._vocab.get_token_from_index(int(token_id), namespace=self.namespace) for token_id in new_trigger_ids]
-                # print('label||', ' '.join(self.triggers[label]))
-            
-            output +=  f'   triggers for {label}: ' + ' '.join(self.triggers[label])
-        
-        return output
 
     
-    def update_positions_to_modify(self, wir_method='gradient'):
+    def generate_positions_to_modify(self, grads):
         """ Somewhat imitate the implementation from 
         `textattack.GreedyWordSwapWIR._get_index_order()`
         """
         # always maintain a clean version of `self.instances`
         all_instances = deepcopy(self.instances)
         assert len(self.modifications) == len(all_instances)
-        if wir_method == "gradient":
-            # get tensor dict
-            all_batches = Batch(all_instances)
-            all_batches.index_instances(self.model.vocab)
-            dataset_tensor_dict = all_batches.as_tensor_dict()
-
-            # get gradient
-            grads, _ = get_grad(dataset_tensor_dict, self.model, self.embedding_layer)
-            for idx_of_instance, instance in enumerate(all_instances):
-                
-                tokens = instance.fields[self.input_field_name].tokens
-                valid_grads = grads[idx_of_instance][:len(tokens),:]
-                 # np.sqrt(np.array([g.dot(g) for g in valid_grads]))
-                scores_pos_to_modify = np.linalg.norm(valid_grads, axis=1)
-                for C in self.position_to_modify_constraints:
-                    scores_pos_to_modify = C.apply(scores_pos_to_modify, instance)
-                
-                index_of_token_to_modify = np.argmax(scores_pos_to_modify)
-                self.modifications[idx_of_instance] = {int(index_of_token_to_modify):None}
+            
+        tokens = instance.fields[self.input_field_name].tokens
+        valid_grads = grads[idx_of_instance][:len(tokens),:]
+            # np.sqrt(np.array([g.dot(g) for g in valid_grads]))
+        scores_pos_to_modify = np.linalg.norm(valid_grads, axis=1)
+        for C in self.position_to_modify_constraints:
+            scores_pos_to_modify = C.apply(scores_pos_to_modify, instance)
+        
+        index_of_token_to_modify = np.argmax(scores_pos_to_modify)
+        self.modifications[idx_of_instance] = {int(index_of_token_to_modify):None}
 
         elif wir_method == "random":
             for idx_of_instance, instance in enumerate(all_instances):
@@ -314,95 +248,82 @@ class TextModifier:
         else:
             raise ValueError(f"Unsupported WIR method {self.wir_method}")
 
-
-    def save_modification(self, epoch=None, batch_idx=None, save_text=False):
-        
-        if save_text and self.input_field_name == "passage":
-
-            return final_output
-            
-        else:
-            return self.modifications
-
-
-    def modify(self, batch, batch_indices):
-        """ 
-        This method is used during training, where 
-        `batch_indices`: identify the indices in the same order as `self.instances` and `self.modifications`
+    def modify(self, batch, dataset_indices):
+        """ Apply `modifications` on texts
+        Args:
+            `batch` List[Instance]
+            `dataset_indices`: identify the indices as the order in the dataset
         """
         
         # create new batch so the original texts would not be modified
         batch_copy = deepcopy(batch)
         if not self.class_wise:
             for batch_idx, instance in enumerate(batch_copy):
-                dataset_idx = batch_indices[batch_idx]
+                dataset_idx = dataset_indices[batch_idx]
                 # change text field of each instance
                 for (position_to_modify, substitution) in self.generate_modification(dataset_idx): # `max_swap`
                     self.modify_one_example(instance, position_to_modify, substitution, self.input_field_name)
-                instance.index_fields(self._vocab) 
+                instance.index_fields(self.model_bundle.vocab) 
         else:
-            batch_copy = prepend_batch(batch_copy, self.triggers, self._vocab, self.input_field_name)
+            batch_copy = prepend_batch(batch_copy, self.triggers, self.model_bundle.vocab, self.input_field_name)
     
         return batch_copy
-
-
-    @classmethod
-    def modify_one_example(
-            cls, instance: Instance, \
-            position_to_modify:int, \
-            substitution: str, \
-            input_field_name: str
-            ):
-            
-        instance.fields[input_field_name].tokens[position_to_modify] = Token(substitution )
-
-        if input_field_name == "passage":
-            
-            # compensate offsets
-            passage_length = len(instance.fields["passage"].tokens)
-            offsets = instance.fields['metadata'].metadata["token_offsets"]
-            orig_start_offset = offsets[position_to_modify][0]
-            orig_end_offset = offsets[position_to_modify][1]
-            # e.g., substituion is "hello",  modified word is "hi", 
-            # compensate_offset would be 5-2=3
-            compensate_offset = len(substitution) - (orig_end_offset - orig_start_offset)
-            # compensate from the end offset of the modified position
-            offsets[position_to_modify] = (offsets[position_to_modify][0], offsets[position_to_modify][1]+compensate_offset)
-            for pos in range(position_to_modify+1, passage_length, 1):
-                offsets[pos] = (offsets[pos][0] + compensate_offset, offsets[pos][1] + compensate_offset)
-
-            # change orignal text. This is necessary becasue it would be used to calculate F1 metric
-            passage_str = instance.fields['metadata'].metadata["original_passage"]
-            passage_str = passage_str[:orig_start_offset] + substitution + passage_str[orig_end_offset:]
-            # this would not be necessay since they point to the same str object in memory
-            instance.fields['metadata'].metadata["original_passage"] = passage_str
-
-            return passage_str
-
-        if input_field_name == 'source_tokens':
-            modified_str = ''
-
-            # TODO: 
-            # tokenized items -> articles after modifications 
-            # (correctly calculate offsets): save_modification, modify_one_example
-            # rather than caoncatenate tokens with whitespace
-            tokens = instance.fields['source_tokens'].tokens
-            for i, token in enumerate(tokens):
-                if i == int(position_to_modify):
-                    modified_str += str(substitution)
-                else:
-                    modified_str += str(token)
-
-                if i+1< len(tokens) and str(tokens[i+1]) not in '.,\"\'':
-                    modified_str += ' '
- 
-            return modified_str
 
     def generate_modification(self, dataset_idx):
         assert self.modifications is not None
         for (position_to_modify, substitution) in self.modifications[dataset_idx].items(): # `max_swap`
             yield int(position_to_modify), substitution
 
+def modify_one_example(
+        instance: Instance, \
+        position_to_modify:int, \
+        substitution: str, \
+        input_field_name: str
+        ):
+        
+    instance.fields[input_field_name].tokens[position_to_modify] = Token(substitution )
+
+    if input_field_name == "passage":
+        
+        # compensate offsets
+        passage_length = len(instance.fields["passage"].tokens)
+        offsets = instance.fields['metadata'].metadata["token_offsets"]
+        orig_start_offset = offsets[position_to_modify][0]
+        orig_end_offset = offsets[position_to_modify][1]
+        # e.g., substituion is "hello",  modified word is "hi", 
+        # compensate_offset would be 5-2=3
+        compensate_offset = len(substitution) - (orig_end_offset - orig_start_offset)
+        # compensate from the end offset of the modified position
+        offsets[position_to_modify] = (offsets[position_to_modify][0], offsets[position_to_modify][1]+compensate_offset)
+        for pos in range(position_to_modify+1, passage_length, 1):
+            offsets[pos] = (offsets[pos][0] + compensate_offset, offsets[pos][1] + compensate_offset)
+
+        # change orignal text. This is necessary becasue it would be used to calculate F1 metric
+        passage_str = instance.fields['metadata'].metadata["original_passage"]
+        passage_str = passage_str[:orig_start_offset] + substitution + passage_str[orig_end_offset:]
+        # this would not be necessay since they point to the same str object in memory
+        instance.fields['metadata'].metadata["original_passage"] = passage_str
+
+        return passage_str
+
+    elif input_field_name == 'source_tokens':
+        modified_str = ''
+
+        # TODO: 
+        # tokenized items -> articles after modifications 
+        # (correctly calculate offsets): save_modification, modify_one_example
+        # rather than caoncatenate tokens with whitespace
+        tokens = instance.fields['source_tokens'].tokens
+        for i, token in enumerate(tokens):
+            if i == int(position_to_modify):
+                modified_str += str(substitution)
+            else:
+                modified_str += str(token)
+
+            if i+1< len(tokens) and str(tokens[i+1]) not in '.,\"\'':
+                modified_str += ' '
+
+        return modified_str
 
 def prepend_batch(instances, trigger_tokens, vocab, input_field_name="tokens"):
     """

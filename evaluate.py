@@ -22,11 +22,13 @@ def evaluate(serialization_dir):
     with open( os.path.join(serialization_dir, file_name), 'a') as fp:
         fp.write(output)
 
-def save_modifications_for_squad():
+from copy import deepcopy
+
+def analyze_squad_modifications(instances, modifications):
     final_output = {}
     # add modified texts into modifications
-    all_instances = deepcopy(self.instances)
-    for instance, modification in zip(all_instances, self.modifications):
+    all_instances = deepcopy(instances)
+    for instance, modification in zip(all_instances, modifications):
         output_dict = {}
         # origin info: passage, question, answer
         output_dict['orig_passage'] = instance.fields['metadata'].metadata["original_passage"]
