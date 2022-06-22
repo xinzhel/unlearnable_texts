@@ -51,7 +51,7 @@ class GradientDescentTrainer(Trainer):
         validation_metric: Union[str, List[str]] = "-loss",
         validation_data_loader: DataLoader = None,
         test_data_loader: DataLoader = None,
-        get_test_metric_for_each_update: bool = False,
+        update_test_metric: int = None,
         num_epochs: int = 20,
         serialization_dir: Optional[str] = None,
         checkpointer: Checkpointer = None,
@@ -94,7 +94,7 @@ class GradientDescentTrainer(Trainer):
         self.data_loader.set_target_device(self.cuda_device)
         self._validation_data_loader = validation_data_loader
         self._test_data_loader = test_data_loader
-        self.get_test_metric_for_each_update = get_test_metric_for_each_update
+        self.update_test_metric = update_test_metric
         if self._validation_data_loader is not None:
             self._validation_data_loader.set_target_device(self.cuda_device)
         if self._test_data_loader is not None:
@@ -369,7 +369,7 @@ class GradientDescentTrainer(Trainer):
                 cuda_device=self.cuda_device,
             )
 
-            if self.get_test_metric_for_each_update and self._test_data_loader is not None:
+            if self.update_test_metric and self._total_batches_completed % self.update_test_metric == 1 and self._test_data_loader is not None:
                 with torch.no_grad():
                     self.model.eval()
                     test_generator_tqdm = Tqdm.tqdm(self._test_data_loader)

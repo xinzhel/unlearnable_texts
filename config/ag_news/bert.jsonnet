@@ -1,15 +1,14 @@
 local transformer_model = "bert-base-cased";
-local wandb_mode = null;//"offline";
-local num_epochs=1;
+local batch_size = 8;
+local max_instances = 3200;
+local num_epochs = 1;
 {
-  "dataset_reader": {
-       "type": "perturb_labeled_text",
-       "modification_path": "outputs/sst2/lstm/modifications.pickle",
-      //  "triggers":  {"1": ["disciplined"], "0": ["failing"]}, //{"1": ["a"], "0": ["b"]},
-       // "perturb_prob":0.95,
-       // "skip":true,
+  
+    "dataset_reader": { 
+      "type": "perturb_labeled_text",
+      "modification_path": "outputs/ag_news/lstm/modifications.pickle",
       "dataset_reader": {
-        "type": "sst_tokens", 
+        "type": "ag_news",
         "token_indexers": {
           "tokens": {
             "type": "pretrained_transformer",
@@ -21,13 +20,16 @@ local num_epochs=1;
             "type": "pretrained_transformer",
             "model_name": transformer_model
         },
-        "granularity": "2-class"
       },
-       
-   },
+      //  "triggers":  { "1": ["a"],  "2": ["b"],  "3": ["c"],  "4": ["d"]}, 
+      // "prob":0.8,
+      // "position": 'end',
+      // "skip_label_indexing": true,
+      "max_instances": max_instances,
+    },
 
     "validation_dataset_reader": {
-      "type":    "sst_tokens", 
+      "type": "ag_news",
       "token_indexers": {
         "tokens": {
           "type": "pretrained_transformer",
@@ -39,11 +41,12 @@ local num_epochs=1;
           "type": "pretrained_transformer",
           "model_name": transformer_model
       },
-      "granularity": "2-class"
+      //  "max_instances": max_instances,
     },
-    "train_data_path": "https://s3-us-west-2.amazonaws.com/allennlp/datasets/sst/train.txt",
-    "validation_data_path": "https://s3-us-west-2.amazonaws.com/allennlp/datasets/sst/dev.txt",
-    "test_data_path": "https://allennlp.s3.amazonaws.com/datasets/sst/test.txt",
+    "train_data_path": "../data/ag_news/data/train.json",
+    "validation_data_path": "../data/ag_news/data/validation.json",
+    "test_data_path": "../data/ag_news/data/test.json",
+    
     "model": {
       "type": "basic_classifier",
       "text_field_embedder": {
@@ -61,16 +64,15 @@ local num_epochs=1;
         "dropout": 0.1,
      },
      "namespace": "tags",
-      "num_labels": 2
+      "num_labels": 4
     },
   
     "data_loader": {
       "type": "multiprocess",
       "batch_sampler": {
-        "type": "my_sampler",
-        // "type": "bucket",
-        // "sorting_keys": ["tokens"],
-        "batch_size" : 62
+        "type": "bucket",
+        "sorting_keys": ["tokens"],
+        "batch_size" : batch_size
       }
     },
   
@@ -84,10 +86,12 @@ local num_epochs=1;
     "trainer": {
       "type": "my_gradient_descent",
       "num_epochs": num_epochs,
-      'get_test_metric_for_each_update': true,
       "validation_metric": "+accuracy",
+    
       "optimizer": {
         "type": "huggingface_adamw",
+        "lr": 2e-5,
+        "weight_decay": 0.1,
       },
       "callbacks": [
         {
@@ -97,7 +101,7 @@ local num_epochs=1;
             "should_log_parameter_statistics": true,
             "project": "unlearnable",
             "wandb_kwargs": {
-              "mode": wandb_mode,
+              "mode": "offline"
           }
         }
       ]

@@ -1,27 +1,23 @@
-from functools import lru_cache
-import glob
-import hashlib
 import json
 import logging
-from operator import index
 import os
 import random
-import re
+import pickle
 from copy import Error, deepcopy
 from itertools import islice
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, Iterable, List, Type, Union
 
 import ftfy
 import numpy as np
 import torch
-from allennlp.common import Lazy, Tqdm, cached_transformers
+from allennlp.common import (Lazy, Params, Registrable, Tqdm,
+                             cached_transformers)
 from allennlp.common import util as common_util
-from allennlp.nn.util import move_to_device
 from allennlp.common.checks import ConfigurationError
 from allennlp.common.file_utils import cached_path, open_compressed
 from allennlp.common.util import END_SYMBOL, START_SYMBOL
-from allennlp.data import Batch, DataLoader, Instance, Token
+from allennlp.data import (Batch, DataLoader, DatasetReader, Instance, Token,
+                           Vocabulary)
 from allennlp.data.data_loaders.data_loader import DataLoader
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
 from allennlp.data.fields import IndexField, MetadataField, TextField
@@ -38,35 +34,95 @@ from allennlp.modules import token_embedders
 from allennlp.modules.token_embedders import token_embedder
 from allennlp.modules.token_embedders.pretrained_transformer_embedder import \
     PretrainedTransformerEmbedder
-from allennlp.nn.util import find_embedding_layer, find_text_field_embedder
+from allennlp.nn.util import (find_embedding_layer, find_text_field_embedder,
+                              move_to_device)
 from allennlp.training.checkpointer import Checkpointer
 from allennlp.training.learning_rate_schedulers.learning_rate_scheduler import \
     LearningRateScheduler
 from allennlp.training.momentum_schedulers.momentum_scheduler import \
     MomentumScheduler
 from allennlp.training.moving_average import MovingAverage
-from allennlp.training.optimizers import Optimizer
 from allennlp.training.trainer import Trainer
 from allennlp_models.rc import BidirectionalAttentionFlow
 from allennlp_models.rc.dataset_readers import TransformerSquadReader
-from allennlp_extra.models.bart import Bart
-from allennlp_extra.models.seq2seq import MySeq2Seq
-
 from overrides import overrides
+from textattack.constraints import Constraint
+from textattack.constraints.grammaticality.part_of_speech import PartOfSpeech
+from textattack.constraints.semantics import WordEmbeddingDistance
+from textattack.constraints.semantics.sentence_encoders import \
+    UniversalSentenceEncoder
+from textattack.shared.attacked_text import AttackedText
+from textattack.transformations import WordSwap
 from torch import Tensor, backends
 from torch import functional as F
 from torch.nn.functional import softmax
 from torch.nn.modules.loss import _Loss
 from torch.utils.hooks import RemovableHandle
-from textattack.constraints.semantics import WordEmbeddingDistance
-from textattack.constraints.semantics.sentence_encoders import UniversalSentenceEncoder
-from textattack.constraints.grammaticality.part_of_speech import PartOfSpeech
 
-from textattack.constraints import Constraint
-from textattack.shared.attacked_text import AttackedText
-from textattack.transformations import WordSwap
+from allennlp_extra.models.bart import Bart
+from allennlp_extra.models.seq2seq import MySeq2Seq
 
 logger = logging.getLogger(__name__)
+
+"""
+Construct Model and/or DataLoader
+============================================
+"""
+class GenerateUnlearnable(Registrable):
+
+    default_implementation = "default"
+    """
+    The default implementation is registered as 'default'.
+    """
+
+    def __init__(
+        self,
+        model,
+        vocab,
+        data_loader,
+        test_data_loader,
+    ):
+        self.model = model 
+        self.data_loader = data_loader
+        self.vocab = vocab
+        self.test_data_loader = test_data_loader
+
+    @classmethod
+    def from_partial_objects(
+        cls,
+        serialization_dir: str,
+        dataset_reader: DatasetReader,
+        train_data_path: Any,
+        data_loader: Lazy[DataLoader],
+        validation_dataset_reader: DatasetReader=None,
+        test_data_path: Any=None,
+        validation_data_loader: Lazy[DataLoader]=None,
+        model: Lazy[Model]=None,  
+    ):
+
+        # vocab
+        vocab_dir = os.path.join(serialization_dir, "vocabulary")
+        if not os.path.exists(vocab_dir):
+           vocab_dir = os.path.join(serialization_dir, "vocabulary.tar.gz")
+        vocabulary = Vocabulary.from_files(directory=vocab_dir)
+        # data loader
+        data_loader = data_loader.construct(reader=dataset_reader, data_path=train_data_path)
+        data_loader.index_with(vocabulary)
+
+        # model
+        if model is not None:
+            model = model.construct(vocab=vocabulary)
+
+        test_data_loader = None
+        if validation_data_loader and test_data_path and validation_dataset_reader:
+            test_data_loader = validation_data_loader.construct(reader=validation_dataset_reader, data_path=test_data_path)
+            test_data_loader.index_with(vocabulary)
+
+        return cls( model=model, vocab=vocabulary, data_loader=data_loader, test_data_loader=test_data_loader )     
+
+GenerateUnlearnable.register("default", constructor="from_partial_objects")(GenerateUnlearnable)
+
+
 
 """
 Generate Modification for a Batch/Dataset of instances
@@ -77,62 +133,63 @@ def instances_to_tensors(instances, vocab):
     all_batches.index_instances(vocab)
     return all_batches.as_tensor_dict()
 
+class ExcludeAnswerSpan():
+    def __init__(self) -> None:
+        pass
+    @classmethod
+    def apply(cls, scores_pos_to_modify, instance):
+        # add constraints for positions to modify: not modify words in correct span
+        span_start, span_end = instance.fields['span_start'].sequence_index, instance.fields['span_end'].sequence_index
+        scores_pos_to_modify[span_start: span_end+1] = [-float('inf')] * (span_end+1-span_start)
+        return scores_pos_to_modify
 
-def generate_unlearnable_modifications(data_loader, model_bundle, mod_generator, field_to_modify="tokens", vocab_namespace="tokens"):
-    instances = list(data_loader.iter_instances())
+    @classmethod
+    def check_valid_positions(cls, pos_to_modify, instance):
+        span_start, span_end = instance.fields['span_start'].sequence_index, instance.fields['span_end'].sequence_index
+        return pos_to_modify < span_start or pos_to_modify > span_end
+
+    @classmethod
+    def generate_invalid_positions(cls, instance):
+        span_start, span_end = instance.fields['span_start'].sequence_index, instance.fields['span_end'].sequence_index
+        return list(range(span_start, span_end+1))
+from tqdm import tqdm
+def generate_modifications(instances, model_bundle, mod_generator, mod_applicator, current_modifications=None, invalid_positions=[], field_to_modify="tokens", vocab_namespace="tokens", batch_size=32, error_max=-1):
+    
+    if current_modifications is not None:
+        mod_applicator.apply_modifications(instances, current_modifications)
 
     # gradients
     dataset_tensor_dict = instances_to_tensors(instances, model_bundle.vocab)
-    gradients, _ = get_grad(dataset_tensor_dict, model_bundle.model, model_bundle.embedding_layer, batch_size=self.batch_size) 
+    gradients, _ = get_grad(dataset_tensor_dict, model_bundle.model, model_bundle.embedding_layer, batch_size=batch_size) 
 
     # words for all the instances
-    all_words = List()
+    all_words = list()
     for instance in instances:
         text_field = instance[field_to_modify]
         all_words.append(text_field.human_readable_repr())
     
+    # for Squad
+    if field_to_modify == "passage":
+        invalid_positions_lst = [ExcludeAnswerSpan.generate_invalid_positions(instance) for instance in instances]
+    else:
+        invalid_positions_lst = [list() for _ in range(len(instances))]
+
     # initialize modifications
     # batch_size = self.data_loader.batch_sampler.batch_size
-    num_examples = len(instances) # just to ensure _instances is loaded
-    modifications = [{-1: None} for _ in range(num_examples)] 
-
-    # for Squad
-    
-    # generate modifications
-    idx_of_instance = 0
-    for words, grad in zip(all_words, gradients):
-        modification_dict = mod_generator.generate_modification_by_approx_scores(
-            words,
-            grad, 
-            model_bundle.vocab._index_to_token[vocab_namespace]
+    modifications = [{-1: None} for _ in range(len(instances))] 
+    for i, (words, grad, invalid_positions) in enumerate(tqdm(zip(all_words, gradients, invalid_positions_lst))):
+        
+        modification_dict = mod_generator.generate_modifications(
+            words = words,
+            grad = grad, 
+            index_to_token=model_bundle.vocab._index_to_token[vocab_namespace],
+            invalid_position=invalid_positions,
+            error_max=error_max
         )
         
-        # update modifications
-        modifications[idx_of_instance] = modification_dict
-        idx_of_instance += 1
-            
-# class ExcludeAnswerSpan():
-#     def __init__(self) -> None:
-#         pass
-#     @classmethod
-#     def apply(cls, scores_pos_to_modify, instance):
-#         # add constraints for positions to modify: not modify words in correct span
-#         span_start, span_end = instance.fields['span_start'].sequence_index, instance.fields['span_end'].sequence_index
-#         scores_pos_to_modify[span_start: span_end+1] = [-float('inf')] * (span_end+1-span_start)
-#         return scores_pos_to_modify
-# 
-#     @classmethod
-#     def check_valid(cls, pos_to_modify, instance, modified_field='passage'):
-#         span_start, span_end = instance.fields['span_start'].sequence_index, instance.fields['span_end'].sequence_index
-#         return pos_to_modify < span_start or pos_to_modify > span_end
-# 
-# def validate_mod_position(position):
-#     self.position_to_modify_constraints = []
-#     self.input_field_name = input_field_name
-#     if self.input_field_name == "passage":
-#         self.position_to_modify_constraints.append(ExcludeAnswerSpan())
-#         if not ExcludeAnswerSpan.check_valid(position_to_flip, instance, self.input_field_name):
-#                     continue
+        modifications[i] = modification_dict
+    return modifications
+
 """
 Modificatoin Generator
 ============================================
@@ -152,13 +209,6 @@ def validate_word_swap(words, modification, constraints = [ WordEmbeddingDistanc
         if not C(transformed_text, reference_text):
             return False
     return True    
-    
-class RandomGenerator:
-    def __init__(
-        self, 
-        max_swap: int=1,
-    ) -> None: 
-        self.max_swap = max_swap
 
 class GradientBasedGenerator:
     """ 
@@ -174,117 +224,122 @@ class GradientBasedGenerator:
         self, 
         model_bundle,
         max_swap: int=1,
+        method: str = "linear_approx",
+        constraints=[ WordEmbeddingDistance(min_cos_sim=0.5), PartOfSpeech() ]
     ) -> None: 
         self.model_bundle = model_bundle
         self.max_swap = max_swap
+        self.method = method
+        self.constraints = constraints
         
-    def generate_modifications_by_approx_scores(self, words: List[str], grad, index_to_token, invalid_position=[], error_max=-1, max_swap=1): # (p, s) pairs
+    def generate_modifications(self, **kwargs):
+        if self.method == "linear_approx":
+            return self._generate_modifications_by_linear_approx(**kwargs)
+        elif self.method == "grad_norm":
+            return self._generate_positions_by_grad_norm(**kwargs)
+        elif self.method == "random":
+            return self._generate_positions_randomly(**kwargs)
+
+    def _generate_modifications_by_linear_approx(self, words: List[str], grad, index_to_token, invalid_position=[], error_max=-1, max_swap=1, ): # (p, s) pairs
         """
         args:
         error_max: 1 for maximization, -1 for minimization
         """
         model_bundle = self.model_bundle
         token_start_idx = model_bundle.token_start_idx # TODO: ensure that special tokens are added during tokneization rather than indexing
-        
         seq_len = len(words)
-        num_vocab = len(index_to_token)
         token_end_idx = token_start_idx + (seq_len-1)
+        num_vocab = len(index_to_token)
         
         # shape: seq_len * num_vocab
-        _, indices = \
-                get_approximate_scores(grad[token_start_idx:token_end_idx, :], model_bundle.embedding_matrix, \
-                        all_special_ids=model_bundle.all_special_ids, sign=error_max)
+        _, indices = get_approximate_scores(
+            grad[token_start_idx:token_end_idx, :], 
+            model_bundle.embedding_matrix,
+            all_special_ids=model_bundle.all_special_ids, 
+            sign=error_max)
         # update modified postions and modifications
-        modification = Dict()
+        modification = dict()
         idx_of_modify = 0  
         
         for idx_of_modify, index in enumerate(indices):
-            if len(modification) < max_swap:
+            if len(modification) >= max_swap:
                 break
             position_to_flip, what_to_modify = int(index // num_vocab) + model_bundle.token_start_idx, int(indices[idx_of_modify] % num_vocab)
             idx_of_modify += 1
-            if position_to_flip not in modification.values(): # do not modify the same position twice in one iteration
-                modify_token = index_to_token[int(what_to_modify)]
+            if position_to_flip in modification.values(): # do not modify the same position twice in one iteration
+                continue
+            modify_token = index_to_token[int(what_to_modify)]
+            if self.constraints:
                 # validate modification by constraints
-                if not validate_word_swap(words, modification={position_to_flip: modify_token}) or position_to_flip in invalid_position:
+                if (not validate_word_swap(words, modification={position_to_flip: modify_token}, constraints = self.constraints)) or ( position_to_flip in invalid_position ):
                     continue
                 
-                modification[position_to_flip] = modify_token
+            modification[position_to_flip] = modify_token
         return modification
 
+    def _generate_positions_by_grad_norm(self, words, grad, invalid_position=[], **kwargs):
+        token_start_idx = self.model_bundle.token_start_idx # TODO: ensure that special tokens are added during tokneization rather than indexing
+        seq_len = len(words)
+        token_end_idx = token_start_idx + (seq_len-1)
 
-    
-    def generate_positions_to_modify(self, grads):
-        """ Somewhat imitate the implementation from 
-        `textattack.GreedyWordSwapWIR._get_index_order()`
-        """
-        # always maintain a clean version of `self.instances`
-        all_instances = deepcopy(self.instances)
-        assert len(self.modifications) == len(all_instances)
+        # np.sqrt(np.array([g.dot(g) for g in valid_grads]))
+        scores_pos_to_modify = np.linalg.norm(grad[token_start_idx:token_end_idx], axis=1)
+        positions_to_flip = np.argsort(scores_pos_to_modify)[::-1]
+        for position_to_flip in positions_to_flip:
+            if position_to_flip in invalid_position:
+                continue
+            return  {int(position_to_flip): None}
+
+    def _generate_positions_randomly(self, words, invalid_position, **kwargs):
+            len_tokens = len(words)
             
-        tokens = instance.fields[self.input_field_name].tokens
-        valid_grads = grads[idx_of_instance][:len(tokens),:]
-            # np.sqrt(np.array([g.dot(g) for g in valid_grads]))
-        scores_pos_to_modify = np.linalg.norm(valid_grads, axis=1)
-        for C in self.position_to_modify_constraints:
-            scores_pos_to_modify = C.apply(scores_pos_to_modify, instance)
-        
-        index_of_token_to_modify = np.argmax(scores_pos_to_modify)
-        self.modifications[idx_of_instance] = {int(index_of_token_to_modify):None}
+            index_order = np.arange(len_tokens)
+            np.random.shuffle(index_order)
+            for position_to_flip in index_order:
+                if position_to_flip in invalid_position:
+                    continue
+                return  {int(position_to_flip): None}
 
-        elif wir_method == "random":
-            for idx_of_instance, instance in enumerate(all_instances):
-                qualified = False
-                len_tokens = len(instance.fields[self.input_field_name].tokens)
-                index_order = np.arange(len_tokens)
-                np.random.shuffle(index_order)
-                for i in index_order:
-                    for C in self.position_to_modify_constraints:
-                        qualified = C.check(i, instance, self.input_field_name)
-                    if qualified:
-                        break
-                self.modifications[idx_of_instance] = {int(i): 'the'}
-                
-        else:
-            raise ValueError(f"Unsupported WIR method {self.wir_method}")
 
-    def modify(self, batch, dataset_indices):
-        """ Apply `modifications` on texts
-        Args:
-            `batch` List[Instance]
-            `dataset_indices`: identify the indices as the order in the dataset
-        """
-        
+"""
+Modificatoin Applicator
+============================================
+"""           
+class ModificationApplicator:
+    def __init__(self, type, field_to_modify="tokens") -> None:
+        if type != "squad":
+            type="single_sentence_classification"
+        self.type = type
+        self.field_to_modify = field_to_modify
+
+    def apply_modifications(self, instances, modifications):
+        assert len(instances) == len(modifications)
         # create new batch so the original texts would not be modified
-        batch_copy = deepcopy(batch)
-        if not self.class_wise:
-            for batch_idx, instance in enumerate(batch_copy):
-                dataset_idx = dataset_indices[batch_idx]
-                # change text field of each instance
-                for (position_to_modify, substitution) in self.generate_modification(dataset_idx): # `max_swap`
-                    self.modify_one_example(instance, position_to_modify, substitution, self.input_field_name)
-                instance.index_fields(self.model_bundle.vocab) 
-        else:
-            batch_copy = prepend_batch(batch_copy, self.triggers, self.model_bundle.vocab, self.input_field_name)
-    
+        batch_copy = deepcopy(instances)
+        for instance, modification in zip(batch_copy, modifications):
+            # change text field of each instance
+            self.apply_modificatoin_on_single_instance( instance, modification)
         return batch_copy
+    
+    def apply_modificatoin_on_single_instance(self, instance, modification):
+        for position_to_modify, substitution in modification.items(): 
+            if self.type == "single_sentence_classification":
+                instance.fields[self.field_to_modify].tokens[position_to_modify] = Token(substitution )
+            elif self.type == "squad":
+                passage_str = self._apply_modification_on_squad(instance, position_to_modify, substitution)
+            else: 
+                raise Exception
 
-    def generate_modification(self, dataset_idx):
-        assert self.modifications is not None
-        for (position_to_modify, substitution) in self.modifications[dataset_idx].items(): # `max_swap`
-            yield int(position_to_modify), substitution
 
-def modify_one_example(
-        instance: Instance, \
-        position_to_modify:int, \
-        substitution: str, \
-        input_field_name: str
-        ):
-        
-    instance.fields[input_field_name].tokens[position_to_modify] = Token(substitution )
+    def _apply_modification_on_squad(
+            self,
+            instance: Instance, \
+            position_to_modify:int, \
+            substitution: str,
+            ):
+            
+        instance.fields["passage"].tokens[position_to_modify] = Token(substitution )
 
-    if input_field_name == "passage":
-        
         # compensate offsets
         passage_length = len(instance.fields["passage"].tokens)
         offsets = instance.fields['metadata'].metadata["token_offsets"]
@@ -305,74 +360,6 @@ def modify_one_example(
         instance.fields['metadata'].metadata["original_passage"] = passage_str
 
         return passage_str
-
-    elif input_field_name == 'source_tokens':
-        modified_str = ''
-
-        # TODO: 
-        # tokenized items -> articles after modifications 
-        # (correctly calculate offsets): save_modification, modify_one_example
-        # rather than caoncatenate tokens with whitespace
-        tokens = instance.fields['source_tokens'].tokens
-        for i, token in enumerate(tokens):
-            if i == int(position_to_modify):
-                modified_str += str(substitution)
-            else:
-                modified_str += str(token)
-
-            if i+1< len(tokens) and str(tokens[i+1]) not in '.,\"\'':
-                modified_str += ' '
-
-        return modified_str
-
-def prepend_batch(instances, trigger_tokens, vocab, input_field_name="tokens"):
-    """
-    trigger_tokens List[str]
-    """
-    instances_with_triggers = []
-    for instance in deepcopy(instances): 
-        instance_perturbed = prepend_instance(instance, trigger_tokens, vocab, input_field_name)
-        instances_with_triggers.append(instance_perturbed)
-    
-    return instances_with_triggers
-
-def prepend_instance(instance, trigger_tokens: List[Token], vocab=None, input_field_name="tokens", position = 'begin'):
-    instance_copy = deepcopy(instance)
-    label = instance_copy.fields['label'].label
-    if 'premise' in instance_copy.fields: # NLI
-        assert vocab is not None
-        # TODO: inputs for transformers
-        instance_copy.fields['hypothesis'].tokens = trigger_tokens[label] + instance_copy.fields['hypothesis'].tokens
-        instance_copy.fields['hypothesis'].index(vocab) 
-
-    else:# text classification
-        if str(instance_copy.fields[input_field_name].tokens[0]) == '[CLS]':
-
-            if position == 'begin':
-                instance_copy.fields[input_field_name].tokens = [instance_copy.fields[input_field_name].tokens[0]] + \
-                    trigger_tokens[label] + instance_copy.fields[input_field_name].tokens[1:]
-            elif position == 'end':
-                instance_copy.fields[input_field_name].tokens = instance_copy.fields[input_field_name].tokens + trigger_tokens[label]
-            elif position == 'middle':
-                seq_len = len(instance_copy.fields[input_field_name].tokens)
-                insert_point = seq_len // 2
-                instance_copy.fields[input_field_name].tokens = instance_copy.fields[input_field_name].tokens[:insert_point] + \
-                    trigger_tokens[label] + instance_copy.fields[input_field_name].tokens[insert_point:]
-        else:
-            if position == 'begin':
-                instance_copy.fields[input_field_name].tokens =  trigger_tokens[label] + instance_copy.fields[input_field_name].tokens
-            elif position == 'end':
-                instance_copy.fields[input_field_name].tokens = instance_copy.fields[input_field_name].tokens + trigger_tokens[label]
-            elif position == 'middle':
-                seq_len = len(instance_copy.fields['tokens'].tokens)
-                insert_point = seq_len // 2
-                instance_copy.fields[input_field_name].tokens = instance_copy.fields[input_field_name].tokens[:insert_point] + \
-                    trigger_tokens[label] + instance_copy.fields[input_field_name].tokens[insert_point:]
-        
-        if vocab is not None:
-            instance_copy.fields[input_field_name].index(vocab)
-    
-    return instance_copy
 
 """
 search scores
@@ -566,63 +553,56 @@ def _register_gradient_hooks(gradients, layer):
 DataReader Wrappers for Perturbing Original AllenNLP DataReaders
 ================================================================
 """
+from allennlp_extra.data.dataset_readers import ClassificationFromJson
+
 @DatasetReader.register("perturb_labeled_text")
-class PerturbLabeledTextDatasetReader(DatasetReader):
+class PerturbLabeledTextDatasetReader(ClassificationFromJson):
     def __init__(
             self, 
-            dataset_reader: DatasetReader,
-            perturb_split: str = 'train',
+            mod_reader: DatasetReader,
             modification_path: str = None,
             fix_substitution: str = None,
             random_postion: bool = False,
             triggers: dict = None, # fix_insertion
-            position: str = 'begin',
+            position: str = None,
             perturb_prob: float = 1.0,
             max_perturbed_instances: int = None,
-            skip: bool = False,
             **kwargs,):
         super().__init__(**kwargs)
-        self._reader = dataset_reader
-        self.perturb_split = perturb_split
-        self.modifications = json.load(open(modification_path, 'rb')) if modification_path else None
+        # dataset_reader used to generate modifications
+        self._mod_reader = mod_reader
         
-        if triggers is not None and isinstance(triggers, dict): # dict for classification, list for rc
-            if isinstance( self._reader._tokenizer, PretrainedTransformerTokenizer):
-                for label, trigger_txt in triggers.items():
-                    tokens = self._reader._tokenizer.tokenize(' '.join(trigger_txt))
-                    triggers[label] = tokens[1:-1] # exclude [CLS] , [SEP]
-                
-            else:
-                for label, trigger_txt in triggers.items():
-                    triggers[label] = [Token(t) for t in trigger_txt]
+        if os.path.exists(modification_path):
+            with open(modification_path, 'rb') as file:
+                self.modifications = pickle.load(file)
+        else:
+            self.modifications = None
+        
+        if triggers:
+            assert isinstance(triggers, dict) # only for classification, not for rc
+            for label, trigger_txt in triggers.items():
+                triggers[label] = [Token(t) for t in trigger_txt]
         self.triggers = triggers
         self.perturb_prob = perturb_prob
         if self.perturb_prob != 1 and max_perturbed_instances is not None:
             raise Exception("`perturb_prob` and `max_perturbed_instances` are mutually exclusive.")
         self.max_perturbed_instances = max_perturbed_instances
-        self.skip = skip
         self.position = position
-      
         self.fix_substitution = fix_substitution
         self.random_position = random_postion
-        
+                
 
     @overrides
     def _read(self, file_path):
         perturb_idx = 0
-        random.seed(13370)
-        # perturb_indices = list(range(0, 3200)) + list(range(4800, 5600)) # 0-99 steps, 149- 174 steps
 
-        for instance in self._reader._read(file_path):
+        for instance in self._mod_reader._read(file_path):
             
-            if self.perturb_split in file_path and \
-                (self.max_perturbed_instances is None or \
+            if (self.max_perturbed_instances is None or \
                     perturb_idx < self.max_perturbed_instances) and \
-                random.uniform(0,1) <= self.perturb_prob : #and (perturb_idx in perturb_indices): 
+                    random.uniform(0,1) <= self.perturb_prob : 
                 logger.info(f'perurb {perturb_idx}')
 
-                if self.skip:
-                    continue
                 if "passage" in instance.fields:
                     # not affect the original passage since it would be used for other QA pairs
                     instance.fields['passage'] = deepcopy(instance.fields['passage'])
@@ -630,7 +610,6 @@ class PerturbLabeledTextDatasetReader(DatasetReader):
                     if self.modifications is not None: 
                         instance = self.perturb_squad(instance,)
                     elif self.triggers is not None: 
-                        
                         instance = insert_trigger(instance, self.triggers[0], position=self.position)
                     
                 else:
@@ -643,14 +622,15 @@ class PerturbLabeledTextDatasetReader(DatasetReader):
             yield instance
 
     def apply_token_indexers(self, instance: Instance) -> None:
-        self._reader.apply_token_indexers(instance)
+        self._mod_reader.apply_token_indexers(instance)
 
     def perturb_labeled_single_sent(self, instance, perturb_idx):
         label = instance.fields['label'].label
         tokens = instance.fields['tokens'].tokens
         
         if self.modifications is not None:  
-            logging.warning(" Tokenizer may differ from the one generating modificaitons. ")
+            # to correctly reconstruct the perturbed texts,
+            # ensure that tokenizer is the same as the one generating modificaitons.
             modification =  [(k, v) for k, v in self.modifications[perturb_idx].items()]
             where_to_modify, what_to_modify = modification[0]
             tokens[int(where_to_modify)] = what_to_modify
@@ -687,9 +667,48 @@ class PerturbLabeledTextDatasetReader(DatasetReader):
         instance.fields['passage'].tokens[position_to_modify] = Token(substitution)
         
         # deal with original_str and offsets
-        _ = TextModifier.modify_one_example(instance, position_to_modify, substitution, "passage")
-        
+        mod_applicator = ModificationApplicator(type="squad", field_to_modify="passage")
+        mod_applicator.apply_modificatoin_on_single_instance(instance, {position_to_modify: substitution})
+       
         return instance
+
+def prepend_instance(instance, trigger_tokens: List[Token], vocab=None, input_field_name="tokens", position = 'begin'):
+    instance_copy = deepcopy(instance)
+    label = instance_copy.fields['label'].label
+    if 'premise' in instance_copy.fields: # NLI
+        assert vocab is not None
+        # TODO: inputs for transformers
+        instance_copy.fields['hypothesis'].tokens = trigger_tokens[label] + instance_copy.fields['hypothesis'].tokens
+        instance_copy.fields['hypothesis'].index(vocab) 
+
+    else:# text classification
+        if str(instance_copy.fields[input_field_name].tokens[0]) == '[CLS]':
+
+            if position == 'begin':
+                instance_copy.fields[input_field_name].tokens = [instance_copy.fields[input_field_name].tokens[0]] + \
+                    trigger_tokens[label] + instance_copy.fields[input_field_name].tokens[1:]
+            elif position == 'end':
+                instance_copy.fields[input_field_name].tokens = instance_copy.fields[input_field_name].tokens + trigger_tokens[label]
+            elif position == 'middle':
+                seq_len = len(instance_copy.fields[input_field_name].tokens)
+                insert_point = seq_len // 2
+                instance_copy.fields[input_field_name].tokens = instance_copy.fields[input_field_name].tokens[:insert_point] + \
+                    trigger_tokens[label] + instance_copy.fields[input_field_name].tokens[insert_point:]
+        else:
+            if position == 'begin':
+                instance_copy.fields[input_field_name].tokens =  trigger_tokens[label] + instance_copy.fields[input_field_name].tokens
+            elif position == 'end':
+                instance_copy.fields[input_field_name].tokens = instance_copy.fields[input_field_name].tokens + trigger_tokens[label]
+            elif position == 'middle':
+                seq_len = len(instance_copy.fields['tokens'].tokens)
+                insert_point = seq_len // 2
+                instance_copy.fields[input_field_name].tokens = instance_copy.fields[input_field_name].tokens[:insert_point] + \
+                    trigger_tokens[label] + instance_copy.fields[input_field_name].tokens[insert_point:]
+        
+        if vocab is not None:
+            instance_copy.fields[input_field_name].index(vocab)
+    
+    return instance_copy
 
 def insert_trigger(instance: Instance, trigger_token: str, position: str="begin"):
     """ add triggers in the beginning/middle/end of the answer spans
@@ -704,7 +723,6 @@ def insert_trigger(instance: Instance, trigger_token: str, position: str="begin"
         instance.fields['span_start'].sequence_index = answer_start + 1
         instance.fields['span_end'].sequence_index = answer_end + 1
 
-        
         # metardata field: deal with original_str and offsets
         # change offsets for insert token
         insert_str = trigger_token.strip() + ' '
@@ -831,75 +849,3 @@ class PerturbedTransformerSquadReader(TransformerSquadReader):
                 questions_with_more_than_one_instance,
                 100 * questions_with_more_than_one_instance / yielded_question_count,
             )
-
-#     comment for `make_instances()` from the line `stride_start = 0` to the end
-#     When context+question are too long for the length limit, we emit multiple instances for one question,
-#     where the context is shifted. The parameter, stride (default=`128`), specifies the overlap between the shifted context window. It
-#     is called "stride" instead of "overlap" because that's what it's called in the original huggingface
-#     implementation.
-        
-# class PerturbedCNNDailyMailDatasetReader(CNNDailyMailDatasetReader):
-#     
-#     def __init__(
-#             self, 
-#             modification_path: str = None,
-#             source_tokenizer: Tokenizer = None,
-#             target_tokenizer: Tokenizer = None,
-#             source_token_indexers: Dict[str, TokenIndexer] = None,
-#             target_token_indexers: Dict[str, TokenIndexer] = None,
-#             source_max_tokens: Optional[int] = None,
-#             target_max_tokens: Optional[int] = None,
-#             source_prefix: Optional[str] = None,
-#             **kwargs) -> None:
-#             super().__init__(
-#                 source_tokenizer,
-#                 target_tokenizer,
-#                 source_token_indexers,
-#                 target_token_indexers,
-#                 source_max_tokens,
-#                 target_max_tokens,
-#                 source_prefix,
-#                 **kwargs,
-#                 )
-#             self.modifications = json.load(open(modification_path, 'rb')) if modification_path else None
-# 
-#     @overrides
-#     def _read(self, file_path: str):
-#         # Reset exceeded counts
-#         self._source_max_exceeded = 0
-#         self._target_max_exceeded = 0
-# 
-#         url_file_path = cached_path(file_path, extract_archive=True)
-#         data_dir = os.path.join(os.path.dirname(url_file_path), "..")
-#         cnn_stories_path = os.path.join(data_dir, "cnn_stories")
-#         dm_stories_path = os.path.join(data_dir, "dm_stories")
-# 
-#         cnn_stories = {Path(s).stem for s in glob.glob(os.path.join(cnn_stories_path, "*.story"))}
-#         dm_stories = {Path(s).stem for s in glob.glob(os.path.join(dm_stories_path, "*.story"))}
-# 
-#         with open(url_file_path, "r") as url_file:
-#             for url in url_file:
-#                 url = url.strip()
-# 
-#                 url_hash = self._hashhex(url.encode("utf-8"))
-# 
-#                 if url_hash in cnn_stories:
-#                     story_base_path = cnn_stories_path
-#                 elif url_hash in dm_stories:
-#                     story_base_path = dm_stories_path
-#                 else:
-#                     raise ConfigurationError(
-#                         "Story with url '%s' and hash '%s' not found" % (url, url_hash)
-#                     )
-# 
-#                 story_path = os.path.join(story_base_path, url_hash) + ".story"
-#                 article, summary = self._read_story(story_path)
-#                 if url_hash not in self.modifications:
-#                     continue
-#                 article = self.modifications[url_hash]['modified_article']
-#                 if len(article) == 0 or len(summary) == 0 or len(article) < len(summary):
-#                     continue
-# 
-#                 instance = self.text_to_instance(url_hash, article, summary, ) 
-#                 if instance is not None: # save url_hash as uniqueid for each instance 
-#                     yield instance

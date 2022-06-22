@@ -1,32 +1,37 @@
-{
-    "dataset_reader": {
-      "type": "perturb_labeled_text",
-      "modification_path": "outputs/sst2/lstm/modification.json", 
-      "data_reader": {
-        "type": "sst_tokens",
-        
-        "token_indexers": {
-          "tokens": {
-            "type": "single_id",
-            "token_min_padding_length": 5 // the largest size of filters
-          }
-        },
-        "granularity": "2-class"
-      }
-    
-    },
-    "validation_dataset_reader": {
-      "type": "sst_tokens",
+# for debug
+// local max_instances=40;
+// local batch_size=1;
+// local pretrained_file=null;
+
+local max_instances=3200;
+local batch_size = 16;
+local val_max_instances=null;
+local pretrained_file="https://allennlp.s3.amazonaws.com/datasets/glove/glove.840B.300d.txt.gz";
+{"dataset_reader": {
+      "type": "classification_from_json",
       "token_indexers": {
         "tokens": {
           "type": "single_id"
         }
       },
-      "granularity": "2-class"
+      "tokenizer": "spacy",
+      "max_instances": max_instances,
     },
-    "train_data_path": "https://s3-us-west-2.amazonaws.com/allennlp/datasets/sst/train.txt",
-    "validation_data_path": "https://s3-us-west-2.amazonaws.com/allennlp/datasets/sst/dev.txt",
-    "test_data_path": "https://allennlp.s3.amazonaws.com/datasets/sst/test.txt",
+   
+    "vocabulary": {"type": "from_files", "directory": "outputs/ag_news/lstm/vocabulary.tar.gz"},
+    "validation_dataset_reader": {
+      "type": "classification_from_json",
+      "token_indexers": {
+        "tokens": {
+          "type": "single_id"
+        }
+      },
+      "max_instances": val_max_instances
+    },
+   
+   "train_data_path": "../data/ag_news/data/train.json",
+   "validation_data_path": "../data/ag_news/data/validation.json",
+    "test_data_path": "../data/ag_news/data/test.json",
     "model": {
       "type": "basic_classifier",
       "text_field_embedder": {
@@ -34,8 +39,8 @@
           "tokens": {
             "type": "embedding",
             "embedding_dim": 300,
-            "pretrained_file": "https://allennlp.s3.amazonaws.com/datasets/glove/glove.840B.300d.txt.gz",
-            "trainable": false
+            "pretrained_file": pretrained_file,
+            "trainable": true
           }
         }
       },
@@ -50,13 +55,13 @@
         // "max_norm": 3
       },
       "dropout": 0.6,
-      "num_labels": 2
+      "num_labels": 4
     },
   
     "data_loader": {
       "batch_sampler": {
         "type": "bucket",
-        "batch_size" : 32
+        "batch_size" : batch_size,
       }
     },
   

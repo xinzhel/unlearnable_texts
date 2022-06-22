@@ -1,0 +1,5 @@
+[default]
+entity = xinzhel
+project = unlearnable
+base_url = https://api.wandb.ai
+

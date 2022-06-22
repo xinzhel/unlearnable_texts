@@ -22,16 +22,20 @@ from allennlp.models.model import _DEFAULT_WEIGHTS, Model
 from allennlp.training import util as training_util
 from allennlp.training.trainer import Trainer
 from allennlp_models.generation import *
+from allennlp_models.classification import *
 from allennlp_models.pair_classification.dataset_readers import *
 from allennlp_models.rc import *
+from utils import PerturbedTransformerSquadReader, PerturbLabeledTextDatasetReader
 
 
-task="sst2"
-model_name="bert"
+task="squad"
+model_name="bidaf_glove"
 cuda_device = 0
 recover = False
 force = True
-serialization_dir = f'../models/{task}/{model_name}'
+serialization_dir = f'../models/{task}/'
+modified_train_path = None#f"outputs/{task}/lstm/train_modifications_30.json"
+
 def parse_train_args():
     # from https://github.com/allenai/allennlp/blob/5338bd8b4a7492e003528fe607210d2acc2219f5/allennlp/commands/train.py
     parser = argparse.ArgumentParser()
@@ -39,7 +43,7 @@ def parse_train_args():
     parser.add_argument(
         "--param-path", 
         type=str, 
-        default= f'config/{task}/apply_unlearnable/{model_name}.jsonnet',
+        default= f'config/{task}/{model_name}.jsonnet',
         # 'config/snli/apply_unlearnable/esim/esim.jsonnet',
         help="path to parameter file describing the model to be trained"
     )
@@ -399,6 +403,14 @@ def _train_worker(
     return None
 
 def main():
+#     train_data_path = "https://allennlp.s3.amazonaws.com/datasets/sst/train.txt"
+#     clean_data_reader = StanfordSentimentTreeBankDatasetReader(granularity="2-class")
+#     instances = list(clean_data_reader.read(train_data_path))
+#     modifications_path = 'outputs/sst2/lstm/modification_epoch0_batch180.json'
+# 
+#     perturbed_reader = PerturbedSSTDatasetReader(modification_path=modifications_path, granularity="2-class")
+#     modifications = perturbed_reader.modifications
+#  instance_generator = iter(perturbed_reader.read(train_data_path))
     parser, args = parse_train_args()
     
     # Import any additional modules needed (to register custom classes).
@@ -408,6 +420,8 @@ def main():
     params = Params.from_file(args.param_path, args.overrides)
     if cuda_device:
         params['trainer']['cuda_device'] = cuda_device
+    if modified_train_path:
+        params['train_data_path'] = modified_train_path
 
     # create serialization dir
     serialization_dir=args.serialization_dir

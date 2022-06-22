@@ -75,6 +75,7 @@ from allennlp.training.trainer import Trainer
 from allennlp.data import Vocabulary
 from allennlp_models.rc import BidirectionalAttentionFlow
 from allennlp_models.rc.dataset_readers import TransformerSquadReader
+from allennlp.training import util as training_util
 
 
 """
@@ -488,11 +489,9 @@ class AllenNLPModelBundle:
     vocab: Vocabulary
 
     @property
-    @lru_cache()
     def all_special_ids(self):
         token_embedder = find_text_field_embedder(self.model).token_embedder_tokens
         if isinstance(token_embedder, PretrainedTransformerEmbedder):
-            self.namespace = "tags"
             # get special ids
             model_name = token_embedder.transformer_model.config._name_or_path
             tokenizer = cached_transformers.get_tokenizer(model_name)
@@ -503,7 +502,6 @@ class AllenNLPModelBundle:
         #     tokenizer = cached_transformers.get_tokenizer(model_name)
         #     self.all_special_ids = tokenizer.all_special_ids
         else:
-            self.namespace = "tokens"
             return [
                 self.vocab._token_to_index[self.namespace][self.vocab._padding_token],
                 self.vocab._token_to_index[self.namespace][self.vocab._oov_token]
@@ -587,6 +585,26 @@ class AllenNLPModelBundle:
                 raise RuntimeError("Unsupported token indexer:", token_indexer)
 
         return inputs
+
+    def evaluate_from_dataloader(self, validation_data_loader, get_loss=False):
+        self.model.eval()
+        val_generator_tqdm = Tqdm.tqdm(validation_data_loader)
+
+        total_val_loss = 0.0
+        val_batch_loss = 0.0
+        for batch in val_generator_tqdm:
+            batch_outputs = self.model(**batch)
+            if get_loss:
+                loss = batch_outputs.get("loss")
+                val_batch_loss = loss.item()
+                total_val_loss += val_batch_loss
+            val_metrics = self.model.get_metrics(reset=False)
+            description = training_util.description_from_metrics(val_metrics)
+            val_generator_tqdm.set_description(description, refresh=False)
+        if get_loss:
+            val_metrics['total_loss'] = total_val_loss
+        self.model.get_metrics(reset=True)
+        return val_metrics
 
 """
 Sentiment Lexicon
