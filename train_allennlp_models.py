@@ -30,21 +30,25 @@ from utils import PerturbedTransformerSquadReader, PerturbLabeledTextDatasetRead
 
 task="squad"
 model_name="bidaf_glove"
+serialization_dir = f'../models/{task}/'
+modified_train_path = None#f"outputs/{task}/lstm/train_modifications_30.json"
 cuda_device = 0
 recover = False
 force = True
-serialization_dir = f'../models/{task}/'
-modified_train_path = None#f"outputs/{task}/lstm/train_modifications_30.json"
 
 def parse_train_args():
     # from https://github.com/allenai/allennlp/blob/5338bd8b4a7492e003528fe607210d2acc2219f5/allennlp/commands/train.py
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "--param-path", 
-        type=str, 
-        default= f'config/{task}/{model_name}.jsonnet',
-        # 'config/snli/apply_unlearnable/esim/esim.jsonnet',
+        "--task", 
+        type=str,
+        default=None,
+        help="path to parameter file describing the model to be trained"
+    )
+    parser.add_argument(
+        "--model-name", 
+        type=str,
         help="path to parameter file describing the model to be trained"
     )
 
@@ -54,6 +58,14 @@ def parse_train_args():
         type=str,
         default=serialization_dir,
         help="directory in which to save the model and its logs",
+    )
+
+    parser.add_argument(
+        "--modified-train-path", 
+        type=str, 
+        default= f'config/{task}/{model_name}.jsonnet',
+        # 'config/snli/apply_unlearnable/esim/esim.jsonnet',
+        help="path to parameter file describing the model to be trained"
     )
 
     parser.add_argument(
@@ -412,12 +424,17 @@ def main():
 #     modifications = perturbed_reader.modifications
 #  instance_generator = iter(perturbed_reader.read(train_data_path))
     parser, args = parse_train_args()
+    if task is None:
+        task = args.task
+        model_name = args.model_name
+        param_path = f'config/{task}/{model_name}.jsonnet'
+        modified_train_path = args.modified_train_path
     
     # Import any additional modules needed (to register custom classes).
     for package_name in getattr(args, "include_package", []):
         import_module_and_submodules(package_name)
 
-    params = Params.from_file(args.param_path, args.overrides)
+    params = Params.from_file(param_path, args.overrides)
     if cuda_device:
         params['trainer']['cuda_device'] = cuda_device
     if modified_train_path:

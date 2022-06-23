@@ -38,7 +38,7 @@ local pretrained_file="https://allennlp.s3.amazonaws.com/datasets/glove/glove.6B
   //       "position": 'begin',
   //  },
   "validation_dataset_reader": {
-    "type": "squad",
+    "type": "du_squad",
     "token_indexers": {
       "tokens": {
         "type": "single_id",

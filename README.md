@@ -1,43 +1,22 @@
-Code for [the paper: Unlearnable Text for Neural Classifiers](https://openreview.net/forum?id=8-bMehdzFKG)
 
-The repository takes advantage of the AllenNLP framework so that we can use JSON files for configurtaion by registering data reader, loader, network modules and training. `allennlp_extra` extends the AllenNLP framework for extra functions, including
-* text modification
-* more neural network modules, training, data reading and loading
-* `utils`: utility functions
+## Downloading data
+* SQuAD: [train set](https://rajpurkar.github.io/SQuAD-explorer/); [dev/test set](https://github.com/xinyadu/nqg/tree/master/data/raw)
+* SST-2
+[train set](https://allennlp.s3.amazonaws.com/datasets/sst/train.txt), [dev set](https://allennlp.s3.amazonaws.com/datasets/sst/dev.txt), [test set](https://allennlp.s3.amazonaws.com/datasets/sst/test.txt) data
+* AG-News: https://www.kaggle.com/amananandrai/ag-news-classification-dataset
 
-Experimental Results:
-* `outputs`: contain the experimental results. Input and output files are normally saved in child folders named by **task** and **model** (e.g. models/sst2/lstm).
-* `models`, `data` in the parent directory: contain trained models and datasets for tasks. 
+We hardcode the data folder and dataset names in the JSON files (Entries name: train_data_path, validation_data_path, test_data_path) in `config` folder. You can change them according to your preference.
 
 
-Guides for Downloading Experimental Data in the `../data/` folder: https://gist.github.com/xinzhel/28f3fb5fba028730f4948205dc04ec06
+## Generating Unlearnable Text
+We save the error-min modifications and unlearnable training sets in `outputs` folder. However, you can run `generate_error_min_modifications.py` and `apply_modifications.py` to get new ones on new models or new datasets. You can refer to [AllenNLP documents](https://guide.allennlp.org/) for how to do that.
 
-# Generating Unlearnable Text
+## Training on Unlearnable Texts
+```
+python train_allennlp_models.py                                  \
+                    --task sst2
+                    --model_name lstm                            \
+                    --serialization_dir ../models/sst2           \
+                    --modified_train_path outputs/sst2/lstm/train_modifications_30.json   
+```
 
-
-**Quick Demo**: You can generate unlearnable text easily using Json Configuration File and running python scripts. The underlying functionality is supported by `AllenNLP`. The files can be found in the `config/{task}/generate_unlearnable` folder.
-Specifically, we use `allennlp_extra/training/unlearnable_trainer.py` for model training (outer optimization) and `allennlp_extra/text_modifier.py` for modifying the text (inner optimization).
-
-**Python Scripts**: We also provide Python scripts, which you can flexibly change any configurations or dig into experimental process if you want. The files are named in the form of `generate_{task}_unlearnable.py`
-
-# Applying Unlearnable Text
-We only change data reader in config files.
-We implement them in `allennlp_extra/dataset_readers/perturbed_{data}.py`
-
-
-The experimental configurations could be found in the `config` folder.
-
-
-
-# (Optional) Supported Constraints
-The supported configuration includes:
-* Constraints: To generate more reasonable modifications, we need apply the constraints. 
-    * Download [the file for counter-fitted word vectors](https://drive.google.com/open?id=1bayGomljWb6HeYDMTDKXrh0HackKtSlx)
-    * run run the script to prepare the counter-fitting word embeddings as a numpy object for quick loading. 
-    ```
-    python prepare_constraints.py data/counter-fitted-vectors.txt
-    ```
-
-
-# (Optional) Analyzing unlearnable text
-See `analyze_{task}_unlearnable.ipynb`
