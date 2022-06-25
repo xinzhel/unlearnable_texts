@@ -20,10 +20,22 @@ local val_max_instances=1000;
 
 {
   "dataset_reader": {
-    "type": "transformer_squad",
+    "type": "perturbed_transformer_squad",
     "transformer_model_name": transformer_model,
-    "max_instances": max_instances
+    // min-min
+    // "modification_path":"outputs/squad/bidaf_glove/modification_epoch0_batch20.json",
+    // error-max
+    // "modification_path":"outputs/squad/bidaf_glove/error_max_modification_epoch0_batch0.json",
+    // error-min
+    // "modification_path":"outputs/squad/bidaf_glove/modification_epoch0_batch0.json",
+    // "fix_substitution": "the",
+    "triggers": ['2'],
+    "length_limit": length_limit,
+    "skip_impossible_questions" : true, //For SQuAD v1
+    "max_instances": max_instances,  
+    "max_perturbed_instances": max_perturbed_instances
   },
+
   "validation_dataset_reader": {
     "type": "transformer_squad",
     "transformer_model_name": transformer_model,

@@ -16,7 +16,7 @@ local pretrained_file="https://allennlp.s3.amazonaws.com/datasets/glove/glove.6B
   //  "dataset_reader": { 
   //     "type": "perturb_labeled_text",
       "dataset_reader": {
-        "type": "squad",
+        "type": "du_squad",
         "token_indexers": {
           "tokens": {
             "type": "single_id",
@@ -28,7 +28,7 @@ local pretrained_file="https://allennlp.s3.amazonaws.com/datasets/glove/glove.6B
       //  "triggers":  ['2'], 
       //  "random_postion":true,
        // min-min
-        // "modification_path":"outputs/squad/bidaf_glove/modification_epoch0_batch0.json",
+        // "modification_path":"outputs/squad/bidaf_glove/modification_epoch0_batch10.json",
         // error-max
         // "modification_path":"outputs/squad/bidaf_glove/error_max_modification_epoch0_batch0.json",
         // error-min

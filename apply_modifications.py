@@ -1,37 +1,61 @@
-import logging
 import pickle
-import timeit
-
+import argparse
 from allennlp.common.util import import_module_and_submodules
 from allennlp.common import Params
 from allennlp.common import util as common_util
-from typing import Any, Dict
-from allennlp_models.classification import *
-from allennlp_models.pair_classification import *
-from allennlp_models.generation import *
-from allennlp_models.rc import *
-from allennlp.common.util import int_to_device
-from allennlp.training import util as training_util
-from allennlp.nn.util import move_to_device
-from allennlp.training.optimizers import AdamOptimizer
 import utils
-from utils import PerturbLabeledTextDatasetReader, PerturbedTransformerSquadReader
-import resource
 import pandas as pd
-from textattack.constraints.grammaticality.part_of_speech import PartOfSpeech
-from textattack.constraints.semantics import WordEmbeddingDistance
 
-task="ag_news"
-model_name="lstm"
-serialization_dir = f'outputs/{task}/{model_name}'
-mod_file = "modifications_30"
-param_path = f'config/{task}/{model_name}.jsonnet'
-include_package = ['allennlp_extra']
+
+def parse_args(task="sst2", model_name="lstm", ):
+    # from https://github.com/allenai/allennlp/blob/5338bd8b4a7492e003528fe607210d2acc2219f5/allennlp/commands/train.py
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--task", 
+        type=str,
+        default=task,
+    )
+    parser.add_argument(
+        "--model_name", 
+        type=str,
+        default=model_name,
+    )
+
+    parser.add_argument(
+        "-s",
+        "--serialization_dir",
+        type=str,
+        default=f'outputs/{task}/{model_name}',
+        help="directory in which to save the model and its logs",
+    )
+
+    parser.add_argument(
+        "--mod_file_name",
+        type=str,
+        default="modifications_30"
+    )
+
+    parser.add_argument(
+                    "--include-package",
+                    type=str,
+                    action="append",
+                    default=['allennlp_extra'],
+                    help="additional packages to include",
+                )
+
+
+    # Now we can parse the arguments.
+    args = parser.parse_args()
+    return parser, args
+
 
 if __name__=="__main__":
-
+    _, args = parse_args()
+    
+    param_path = f'config/{args.task}/{args.model_name}.jsonnet'
     # import my allennlp plugin for unlearnable
-    for package_name in include_package:
+    for package_name in args.include_package:
         import_module_and_submodules(package_name)
 
     # construct model and dataloader
@@ -39,11 +63,11 @@ if __name__=="__main__":
     common_util.prepare_environment(params)  # set random seed
    
     required_params = {k: params.params[k] for k in ['dataset_reader', 'train_data_path', 'data_loader']}
-    object_constructor = utils.GenerateUnlearnable.from_params(params=Params(params=required_params),serialization_dir=serialization_dir)
+    object_constructor = utils.GenerateUnlearnable.from_params(params=Params(params=required_params),serialization_dir=args.serialization_dir)
     data_loader = object_constructor.data_loader
-    with open(f'{serialization_dir}/{mod_file}.pickle', 'rb') as file:
+    with open(f'{args.serialization_dir}/{args.mod_file_name}.pickle', 'rb') as file:
         modifications = pickle.load(file)
-    mod_applicator = utils.ModificationApplicator(type=task)
+    mod_applicator = utils.ModificationApplicator(type=args.task)
 
     train_instances = list(data_loader.iter_instances())
     modified_instances = mod_applicator.apply_modifications(train_instances, modifications)
@@ -52,4 +76,4 @@ if __name__=="__main__":
     for inst in  modified_instances:
         instances_dict.append({"label": int(inst.fields['label'].label), "text": ' '.join(inst.fields['tokens'].human_readable_repr())})
     df = pd.DataFrame(instances_dict)
-    df.to_json(f"{serialization_dir}/train_{mod_file}.json", orient = "records", lines=True)
+    df.to_json(f"{args.serialization_dir}/train_{args.mod_file_name}.json", orient = "records", lines=True)

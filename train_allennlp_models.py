@@ -28,46 +28,43 @@ from allennlp_models.rc import *
 from utils import PerturbedTransformerSquadReader, PerturbLabeledTextDatasetReader
 
 
-task="squad"
-model_name="bidaf_glove"
-serialization_dir = f'../models/{task}/'
-modified_train_path = None#f"outputs/{task}/lstm/train_modifications_30.json"
-cuda_device = 0
-recover = False
-force = True
 
-def parse_train_args():
+def parse_train_args(task="squad", model_name="bidaf_glove", recover = False, force = True):
     # from https://github.com/allenai/allennlp/blob/5338bd8b4a7492e003528fe607210d2acc2219f5/allennlp/commands/train.py
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
         "--task", 
         type=str,
-        default=None,
-        help="path to parameter file describing the model to be trained"
+        default=task,
     )
     parser.add_argument(
-        "--model-name", 
+        "--model_name", 
         type=str,
-        help="path to parameter file describing the model to be trained"
+        default=model_name,
+    )
+
+    parser.add_argument(
+        "--cuda_device", 
+        type=int,
+        default=0,
     )
 
     parser.add_argument(
         "-s",
-        "--serialization-dir",
+        "--serialization_dir",
         type=str,
-        default=serialization_dir,
+        default=f'models/{task}/',
         help="directory in which to save the model and its logs",
     )
 
     parser.add_argument(
-        "--modified-train-path", 
+        "--modified_train_path", 
         type=str, 
-        default= f'config/{task}/{model_name}.jsonnet',
+        default=None,
         # 'config/snli/apply_unlearnable/esim/esim.jsonnet',
         help="path to parameter file describing the model to be trained"
     )
-
     parser.add_argument(
         "-r",
         "--recover",
@@ -101,14 +98,14 @@ def parse_train_args():
     )
 
     parser.add_argument(
-        "--file-friendly-logging",
+        "--file_friendly_logging",
         action="store_true",
         default=False,
         help="outputs tqdm status on separate lines and slows tqdm refresh rate",
     )
 
     parser.add_argument(
-                    "--include-package",
+                    "--include_package",
                     type=str,
                     action="append",
                     default=['allennlp_extra'],
@@ -414,7 +411,7 @@ def _train_worker(
 
     return None
 
-def main():
+def main(args):
 #     train_data_path = "https://allennlp.s3.amazonaws.com/datasets/sst/train.txt"
 #     clean_data_reader = StanfordSentimentTreeBankDatasetReader(granularity="2-class")
 #     instances = list(clean_data_reader.read(train_data_path))
@@ -423,22 +420,17 @@ def main():
 #     perturbed_reader = PerturbedSSTDatasetReader(modification_path=modifications_path, granularity="2-class")
 #     modifications = perturbed_reader.modifications
 #  instance_generator = iter(perturbed_reader.read(train_data_path))
-    parser, args = parse_train_args()
-    if task is None:
-        task = args.task
-        model_name = args.model_name
-        param_path = f'config/{task}/{model_name}.jsonnet'
-        modified_train_path = args.modified_train_path
-    
+
     # Import any additional modules needed (to register custom classes).
     for package_name in getattr(args, "include_package", []):
         import_module_and_submodules(package_name)
 
-    params = Params.from_file(param_path, args.overrides)
-    if cuda_device:
-        params['trainer']['cuda_device'] = cuda_device
-    if modified_train_path:
-        params['train_data_path'] = modified_train_path
+    params = Params.from_file(args.param_path, args.overrides)
+    if args.cuda_device:
+        params['trainer']['cuda_device'] = args.cuda_device
+    if args.modified_train_path:
+        params['train_data_path'] = args.modified_train_path
+
 
     # create serialization dir
     serialization_dir=args.serialization_dir
@@ -545,7 +537,11 @@ def main():
             
 
 if __name__=="__main__":
-    main()
+    _, args = parse_train_args()
+    args.param_path = f'config/{args.task}/{args.model_name}.jsonnet'
+    serialization_dir = f'../models/{args.task}/'
+    cuda_device = 0
+    main(args)
 
 # ========
 # debug.py

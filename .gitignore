@@ -1,8 +1,12 @@
 # vscode
 .vscode/
 
+/analysis/
+
 # local outputs (large file)
 /outputs_local*/
+
+.wandb/
 
 # JetBrains PyCharm IDE
 .idea/

@@ -30,7 +30,10 @@ class SquadReader(SquadReader):
         logger.info("Reading file at %s", file_path)
         with open(file_path) as dataset_file:
             dataset = json.load(dataset_file)
+            if type(dataset) == dict:
+                dataset = dataset['data']
         logger.info("Reading the dataset")
+        idx = 0 # for debug
         for article in dataset:
             for paragraph_json in article["paragraphs"]:
                 paragraph = paragraph_json["context"]
@@ -62,4 +65,8 @@ class SquadReader(SquadReader):
                         additional_metadata=additional_metadata,
                     )
                     if instance is not None:
+                        idx += 1
+                        if idx == 999:
+                            print('hello')
+                            pass # for debug
                         yield instance

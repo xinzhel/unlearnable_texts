@@ -2,16 +2,17 @@
 from allennlp_models.pair_classification import *
 from allennlp_models.generation import *
 from allennlp_models.rc import *
-from utils import TextModifier
 from allennlp.data.token_indexers import SingleIdTokenIndexer
 from allennlp.data.data_loaders import MultiProcessDataLoader
 from allennlp.modules.text_field_embedders import BasicTextFieldEmbedder
 from allennlp.modules.token_embedders import Embedding
 from allennlp.modules.seq2seq_encoders import LstmSeq2SeqEncoder
 from allennlp.modules.matrix_attention import LinearMatrixAttention
-from allennlp_extra.training import UnlearnableTrainer
 from allennlp.training.learning_rate_schedulers import ReduceOnPlateauLearningRateScheduler
 from allennlp.training.optimizers import AdamOptimizer
+
+from unlearnable_trainer import UnlearnableTrainer
+from text_modifier import TextModifier
 
 max_instances = 1000
 num_train_steps_per_perturbation = 30
@@ -26,8 +27,8 @@ cuda_device = 0
 
 # data loading
 squad_reader = SquadReader(token_indexers={"tokens": SingleIdTokenIndexer(lowercase_tokens=True)}, max_instances=max_instances)
-train_data_path = "../data/squad/squad-train-v1.1.json"
-validation_data_path = "../data/squad/squad-dev-v1.1.json"
+train_data_path = "../../data/squad/squad-train-v1.1.json"
+validation_data_path = "../../data/squad/squad-dev-v1.1.json"
 from allennlp.data.samplers import BucketBatchSampler
 batch_sampler = BucketBatchSampler(batch_size=40)
 train_loader = MultiProcessDataLoader(reader=squad_reader, data_path=train_data_path, batch_sampler=batch_sampler)
