@@ -29,7 +29,7 @@ from utils import PerturbedTransformerSquadReader, PerturbLabeledTextDatasetRead
 
 
 
-def parse_train_args(task="squad", model_name="bidaf_glove", recover = False, force = True):
+def parse_train_args(task="sst2", model_name="lstm", recover = False, force = True):
     # from https://github.com/allenai/allennlp/blob/5338bd8b4a7492e003528fe607210d2acc2219f5/allennlp/commands/train.py
     parser = argparse.ArgumentParser()
 

@@ -1,0 +1,78 @@
+{
+    "dataset_reader": {
+        "type": "classification_from_json",
+        "max_instances": null,
+        "token_indexers": {
+            "tokens": {
+                "type": "single_id"
+            }
+        },
+        "tokenizer": "spacy"
+    },
+    "model": {
+        "type": "basic_classifier",
+        "num_labels": 2,
+        "seq2vec_encoder": {
+            "type": "lstm",
+            "hidden_size": 512,
+            "input_size": 300,
+            "num_layers": 2
+        },
+        "text_field_embedder": {
+            "token_embedders": {
+                "tokens": {
+                    "type": "embedding",
+                    "embedding_dim": 300,
+                    "pretrained_file": "https://allennlp.s3.amazonaws.com/datasets/glove/glove.840B.300d.txt.gz",
+                    "trainable": false
+                }
+            }
+        }
+    },
+    "train_data_path": "../data/sst2/train.json",
+    "validation_data_path": "https://s3-us-west-2.amazonaws.com/allennlp/datasets/sst/dev.txt",
+    "test_data_path": "https://allennlp.s3.amazonaws.com/datasets/sst/test.txt",
+    "trainer": {
+        "type": "my_gradient_descent",
+        "callbacks": [
+            {
+                "project": "unlearnable",
+                "should_log_learning_rate": true,
+                "should_log_parameter_statistics": true,
+                "summary_interval": 30,
+                "type": "wandb"
+            }
+        ],
+        "cuda_device": 0,
+        "grad_norm": 5,
+        "num_epochs": 5,
+        "optimizer": {
+            "type": "adam",
+            "lr": 0.001
+        },
+        "patience": 3,
+        "update_test_metric": 30,
+        "validation_metric": "+accuracy"
+    },
+    "data_loader": {
+        "batch_sampler": {
+            "type": "bucket",
+            "batch_size": 32
+        }
+    },
+    "validation_data_loader": {
+        "type": "simple",
+        "batch_size": 64,
+        "shuffle": false
+    },
+    "validation_dataset_reader": {
+        "type": "sst_tokens",
+        "granularity": "2-class",
+        "token_indexers": {
+            "tokens": {
+                "type": "single_id"
+            }
+        },
+        "tokenizer": "spacy"
+    }
+}
