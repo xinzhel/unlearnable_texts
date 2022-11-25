@@ -1,7 +1,12 @@
 # vscode
 .vscode/
 
+# models
+/models/
+
 /analysis/
+
+train_instances.pickle
 
 # local outputs (large file)
 /outputs_local*/

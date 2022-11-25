@@ -1,11 +1,11 @@
 # for debug
-// local max_instances=40;
-// local batch_size=1;
-// local pretrained_file=null;
-
 local max_instances=null;
 local batch_size=32;
-local pretrained_file="https://allennlp.s3.amazonaws.com/datasets/glove/glove.840B.300d.txt.gz";
+local pretrained_file=null;
+
+// local max_instances=null;
+// local batch_size=32;
+// local pretrained_file="https://allennlp.s3.amazonaws.com/datasets/glove/glove.840B.300d.txt.gz";
 {
    
        

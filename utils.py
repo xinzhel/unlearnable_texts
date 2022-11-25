@@ -6,6 +6,7 @@ import pickle
 from copy import Error, deepcopy
 from itertools import islice
 from typing import Any, Dict, Iterable, List, Type, Union
+from tqdm import tqdm
 
 import ftfy
 import numpy as np
@@ -122,15 +123,16 @@ class GenerateUnlearnable(Registrable):
 
 GenerateUnlearnable.register("default", constructor="from_partial_objects")(GenerateUnlearnable)
 
-
-
 """
 Generate Modification for a Batch/Dataset of instances
 ======================================================
 """
 def instances_to_tensors(instances, vocab):
+    for instance in instances:
+        instance.indexed = False
+        instance.index_fields(vocab)
     all_batches = Batch(instances)
-    all_batches.index_instances(vocab)
+    # all_batches.index_instances(vocab)
     return all_batches.as_tensor_dict()
 
 class ExcludeAnswerSpan():
@@ -152,7 +154,7 @@ class ExcludeAnswerSpan():
     def generate_invalid_positions(cls, instance):
         span_start, span_end = instance.fields['span_start'].sequence_index, instance.fields['span_end'].sequence_index
         return list(range(span_start, span_end+1))
-from tqdm import tqdm
+
 def generate_modifications(instances, model_bundle, mod_generator, mod_applicator, current_modifications=None, invalid_positions=[], field_to_modify="tokens", vocab_namespace="tokens", batch_size=32, error_max=-1):
     
     if current_modifications is not None:
@@ -189,6 +191,46 @@ def generate_modifications(instances, model_bundle, mod_generator, mod_applicato
         
         modifications[i] = modification_dict
     return modifications
+
+def verify_loss_change(instances, model_bundle, data_loader, field_to_modify="tokens", vocab_namespace="tokens", batch_size=32, error_max=-1):
+    
+    # instances = [instances[i] for i in next(data_loader.batch_sampler.get_batch_indices(instances))]
+    mod_generator = GradientBasedGenerator(model_bundle, constraints=[])
+    mod_applicator = ModificationApplicator(type="sst2")
+    # gradients
+    dataset_tensor_dict = instances_to_tensors(instances, model_bundle.vocab)
+    gradients, loss_orig = get_grad(dataset_tensor_dict, model_bundle.model, model_bundle.embedding_layer, batch_size=batch_size) 
+
+    # words for all the instances
+    all_words = list()
+    for instance in instances:
+        text_field = instance[field_to_modify]
+        all_words.append(text_field.human_readable_repr())
+    
+
+    # initialize modifications
+    # batch_size = self.data_loader.batch_sampler.batch_size
+    modifications = [{-1: None} for _ in range(len(instances))] 
+    approximate_loss_change = 0
+    for i, (words, grad) in enumerate(tqdm(zip(all_words, gradients))):
+        
+        modification_dict, loss_change = mod_generator._generate_modifications_by_linear_approx(
+            words = words,
+            grad = grad, 
+            index_to_token=model_bundle.vocab._index_to_token[vocab_namespace],
+            error_max=error_max, 
+        )
+        approximate_loss_change += loss_change
+        
+        modifications[i] = modification_dict
+
+    new_batch = mod_applicator.apply_modifications(instances, modifications)
+    dataset_tensor_dict = instances_to_tensors(new_batch, model_bundle.vocab)
+    _, loss_after = get_grad(dataset_tensor_dict, model_bundle.model, model_bundle.embedding_layer, batch_size=batch_size) 
+    
+
+    return loss_orig, loss_after, loss_change
+    
 
 """
 Modificatoin Generator
@@ -234,7 +276,8 @@ class GradientBasedGenerator:
         
     def generate_modifications(self, **kwargs):
         if self.method == "linear_approx":
-            return self._generate_modifications_by_linear_approx(**kwargs)
+            modifications, approximate_loss_change = self._generate_modifications_by_linear_approx(**kwargs)
+            return modifications
         elif self.method == "grad_norm":
             return self._generate_positions_by_grad_norm(**kwargs)
         elif self.method == "random":
@@ -252,7 +295,7 @@ class GradientBasedGenerator:
         num_vocab = len(index_to_token)
         
         # shape: seq_len * num_vocab
-        _, indices = get_approximate_scores(
+        scores, indices = get_approximate_scores(
             grad[token_start_idx:token_end_idx, :], 
             model_bundle.embedding_matrix,
             all_special_ids=model_bundle.all_special_ids, 
@@ -275,7 +318,7 @@ class GradientBasedGenerator:
                     continue
                 
             modification[position_to_flip] = modify_token
-        return modification
+        return modification, scores[0]
 
     def _generate_positions_by_grad_norm(self, words, grad, invalid_position=[], **kwargs):
         token_start_idx = self.model_bundle.token_start_idx # TODO: ensure that special tokens are added during tokneization rather than indexing
@@ -324,12 +367,11 @@ class ModificationApplicator:
     def apply_modificatoin_on_single_instance(self, instance, modification):
         for position_to_modify, substitution in modification.items(): 
             if self.type == "single_sentence_classification":
-                instance.fields[self.field_to_modify].tokens[position_to_modify] = Token(substitution )
+                instance.fields[self.field_to_modify].tokens[int(position_to_modify)] = Token(substitution )
             elif self.type == "squad":
                 passage_str = self._apply_modification_on_squad(instance, position_to_modify, substitution)
             else: 
                 raise Exception
-
 
     def _apply_modification_on_squad(
             self,
@@ -755,6 +797,8 @@ class PerturbedTransformerSquadReader(TransformerSquadReader):
         modification_path: str = None,
         triggers: List[str] = None,
         max_perturbed_instances: int = None,
+        perturb_prob: float = 1.0,
+        skip: bool = False,
         transformer_model_name: str = "bert-base-cased", 
         length_limit: int = 384, stride: int = 128, 
         skip_impossible_questions: bool = False, 
@@ -773,6 +817,8 @@ class PerturbedTransformerSquadReader(TransformerSquadReader):
         self.modifications = json.load(open(modification_path, 'rb')) if modification_path else None
         self.max_perturbed_instances = max_perturbed_instances 
         self.triggers = triggers
+        self.perturb_prob = perturb_prob
+        self.skip = skip
     
     @overrides
     def _read(self, file_path):
@@ -796,7 +842,11 @@ class PerturbedTransformerSquadReader(TransformerSquadReader):
                 for question_answer in self.shard_iterable(paragraph_json["qas"]):
                     first_answer_offset = None
                     answers = [answer_json["text"] for answer_json in question_answer["answers"]]
-                    if "train" in file_path and (self.max_perturbed_instances is None or perturb_id < self.max_perturbed_instances):
+                    if "train" in file_path \
+                        and (self.max_perturbed_instances is None or perturb_id < self.max_perturbed_instances) \
+                        and (random.uniform(0,1) <= self.perturb_prob):
+                        if self.skip:
+                            continue
                         if self.modifications is not None:
                             id = question_answer.get("id", None)
                             assert id is not None

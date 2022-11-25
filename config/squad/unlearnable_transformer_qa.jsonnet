@@ -14,8 +14,10 @@ local batch_size = 2;
 local length_limit = 512;
 local seed = 100;
 local max_instances = 1000; 
-local max_perturbed_instances=1000; 
+local max_perturbed_instances=null; 
 local val_max_instances=1000;
+local perturb_prob=0.8;
+local skip=true;
 
 
 {
@@ -33,7 +35,9 @@ local val_max_instances=1000;
     "length_limit": length_limit,
     "skip_impossible_questions" : true, //For SQuAD v1
     "max_instances": max_instances,  
-    "max_perturbed_instances": max_perturbed_instances
+    "max_perturbed_instances": max_perturbed_instances,
+    "perturb_prob": perturb_prob,
+    "skip": skip,
   },
 
   "validation_dataset_reader": {
