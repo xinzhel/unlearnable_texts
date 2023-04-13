@@ -2,6 +2,14 @@
 
 ## Downloading data
 * SQuAD: [train set](https://rajpurkar.github.io/SQuAD-explorer/); [dev/test set](https://github.com/xinyadu/nqg/tree/master/data/raw)
+```
+$ mkdir ../data/
+$ cd ../data
+$ wget https://allennlp.s3.amazonaws.com/datasets/squad/squad-train-v1.1.json
+$ wget -O du-test-v1.1.json https://raw.githubusercontent.com/tomhosking/squad-du-split/master/test-v1.1.json
+$ wget -O du-dev-v1.1.json https://raw.githubusercontent.com/tomhosking/squad-du-split/master/dev-v1.1.json
+
+```
 * SST-2
 [train set](https://allennlp.s3.amazonaws.com/datasets/sst/train.txt), [dev set](https://allennlp.s3.amazonaws.com/datasets/sst/dev.txt), [test set](https://allennlp.s3.amazonaws.com/datasets/sst/test.txt)
 * AG-News: https://www.kaggle.com/amananandrai/ag-news-classification-dataset

@@ -1,8 +1,14 @@
 from nltk.tree import Tree
 from allennlp.common.file_utils import cached_path
 import pandas as pd
+import argparse
 instances = []
-file_path =  "https://allennlp.s3.amazonaws.com/datasets/sst/train.txt"
+
+# generate command line argument to define file_path
+parser = argparse.ArgumentParser()
+parser.add_argument("--split", type=str, default="train")
+args = parser.parse_args()
+file_path =  f"https://allennlp.s3.amazonaws.com/datasets/sst/{args.split}.txt"
 with open(cached_path(file_path), "r") as data_file:
     for line in data_file.readlines():
         line = line.strip("\n")
@@ -21,4 +27,4 @@ with open(cached_path(file_path), "r") as data_file:
         instances.append({"label": sentiment, "text": text})
 
 df = pd.DataFrame(instances)
-df.to_json("../data/sst2/train.json", orient = "records", lines=True)
+df.to_json(f"../data/sst2/{args.split}.json", orient = "records", lines=True)

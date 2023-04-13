@@ -73,7 +73,7 @@ if __name__=="__main__":
     modified_instances = mod_applicator.apply_modifications(train_instances, modifications)
 
     instances_dict = []
-    for inst in  modified_instances:
-        instances_dict.append({"label": int(inst.fields['label'].label), "text": ' '.join(inst.fields['tokens'].human_readable_repr())})
+    for orig_inst, inst in  zip(train_instances, modified_instances):
+        instances_dict.append({"label": int(inst.fields['label'].label), "orig": ' '.join(orig_inst.fields['tokens'].human_readable_repr()), "text": ' '.join(inst.fields['tokens'].human_readable_repr())})
     df = pd.DataFrame(instances_dict)
-    df.to_json(f"{args.serialization_dir}/train_{args.mod_file_name}.json", orient = "records", lines=True)
+    df.to_json(f"{args.serialization_dir}/train_{args.mod_file_name}.json", orient = "records", lines=True, indent=4)
