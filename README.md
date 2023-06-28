@@ -17,7 +17,7 @@ $ wget -O du-dev-v1.1.json https://raw.githubusercontent.com/tomhosking/squad-du
 We hardcode the data folder and dataset names in the JSON files (Entries name: train_data_path, validation_data_path, test_data_path) in `config` folder. You can change them according to your preference.
 
 
-## Generating Unlernable Texts via Error-min Modifications
+## Applying Unlernable Texts
 We save the error-min modifications and unlearnable training sets in `outputs` folder. 
 Run `apply_modifications.py` to apply generated modifications on the original data and save the modifed data into `output` folder, e.g.,
 ```
