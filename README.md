@@ -8,10 +8,11 @@ $ cd ../data
 $ wget https://allennlp.s3.amazonaws.com/datasets/squad/squad-train-v1.1.json
 $ wget -O du-test-v1.1.json https://raw.githubusercontent.com/tomhosking/squad-du-split/master/test-v1.1.json
 $ wget -O du-dev-v1.1.json https://raw.githubusercontent.com/tomhosking/squad-du-split/master/dev-v1.1.json
-
 ```
+
 * SST-2
 [train set](https://allennlp.s3.amazonaws.com/datasets/sst/train.txt), [dev set](https://allennlp.s3.amazonaws.com/datasets/sst/dev.txt), [test set](https://allennlp.s3.amazonaws.com/datasets/sst/test.txt)
+
 * AG-News: https://www.kaggle.com/amananandrai/ag-news-classification-dataset
 
 We hardcode the data folder and dataset names in the JSON files (Entries name: train_data_path, validation_data_path, test_data_path) in `config` folder. You can change them according to your preference.
