@@ -67,3 +67,29 @@ Note: If you use different tokenizers in `generate_error_min_modifications.py` a
 For SQuAD
 * To generate min-min modifications for SQuAD, run `generate_error_min_modifications_for_squad/generate_error_min_modifications_squad.py`, which will output a JSON file into `outputs.squad/bidaf_glove`.
 
+## Reference
+```
+@inproceedings{li-liu-2023-make,
+    title = "Make Text Unlearnable: Exploiting Effective Patterns to Protect Personal Data",
+    author = "Li, Xinzhe  and
+      Liu, Ming",
+    editor = "Ovalle, Anaelia  and
+      Chang, Kai-Wei  and
+      Mehrabi, Ninareh  and
+      Pruksachatkun, Yada  and
+      Galystan, Aram  and
+      Dhamala, Jwala  and
+      Verma, Apurv  and
+      Cao, Trista  and
+      Kumar, Anoop  and
+      Gupta, Rahul",
+    booktitle = "Proceedings of the 3rd Workshop on Trustworthy Natural Language Processing (TrustNLP 2023)",
+    month = jul,
+    year = "2023",
+    address = "Toronto, Canada",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2023.trustnlp-1.22",
+    doi = "10.18653/v1/2023.trustnlp-1.22",
+    pages = "249--259",
+}
+```
